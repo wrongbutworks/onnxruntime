@@ -506,8 +506,10 @@ def generate_triplet_for_posix_platform(
             if use_telemetry:
                 # sqlite3 is pulled in only as the 1DS telemetry SDK's offline store; compile it with
                 # the matching feature reductions (see _SQLITE_TELEMETRY_MINIMAL_DEFINES) to shrink the
-                # offline-storage footprint and drop runtime extension loading. Scoped per-PORT so it
-                # only affects sqlite3, and gated on telemetry so non-telemetry builds keep their cache.
+                # offline-storage footprint and drop runtime extension loading. The per-PORT guard
+                # applies the flags only to sqlite3, and writing this block only for telemetry builds
+                # leaves a non-telemetry build's triplet byte-for-byte unchanged so its vcpkg binary
+                # cache stays valid (vcpkg keys that cache on the whole triplet file's contents).
                 sqlite_min_defines = " ".join(_SQLITE_TELEMETRY_MINIMAL_DEFINES)
                 f.write('if(PORT STREQUAL "sqlite3")\n')
                 f.write(f'    string(APPEND VCPKG_C_FLAGS " {sqlite_min_defines}")\n')
