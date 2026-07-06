@@ -914,21 +914,19 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     # workarounds below are needed on this path.
     find_package(MSTelemetry CONFIG REQUIRED)
   else()
-    set(BUILD_UNIT_TESTS_SAVED "${BUILD_UNIT_TESTS}")
-    set(BUILD_FUNC_TESTS_SAVED "${BUILD_FUNC_TESTS}")
-    set(BUILD_SAMPLES_SAVED "${BUILD_SAMPLES}")
-    set(BUILD_SHARED_LIBS_SAVED "${BUILD_SHARED_LIBS}")
+    # The 1DS SDK reads these generic option() names from its own CMakeLists. Nothing else in ORT's
+    # build reads them, so set them and leave them (no save/restore). Turn off the SDK's tests and the
+    # optional modules whose source may be absent from the release archive; ORT uses the C++ API directly.
     set(BUILD_UNIT_TESTS OFF CACHE BOOL "Disable 1DS SDK unit tests" FORCE)
     set(BUILD_FUNC_TESTS OFF CACHE BOOL "Disable 1DS SDK functional tests" FORCE)
-    set(BUILD_SAMPLES OFF CACHE BOOL "Disable 1DS SDK samples" FORCE)
-    # Build 1DS SDK as static library
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build 1DS SDK as static library" FORCE)
-    # Disable optional 1DS modules that may not have source in the release archive
     set(BUILD_PRIVACYGUARD OFF CACHE BOOL "Disable 1DS privacy guard module" FORCE)
     set(BUILD_SANITIZER OFF CACHE BOOL "Disable 1DS sanitizer module" FORCE)
-    # Disable ObjC and Swift wrappers - we use the C++ API directly
     set(BUILD_OBJC_WRAPPER OFF CACHE BOOL "Disable 1DS ObjC wrapper" FORCE)
     set(BUILD_SWIFT_WRAPPER OFF CACHE BOOL "Disable 1DS Swift wrapper" FORCE)
+    # BUILD_SHARED_LIBS is a global that ORT's own targets read after this block, and the SDK selects
+    # mat's library type from it (lib/CMakeLists.txt). Save it, force static for the SDK, restore below.
+    set(BUILD_SHARED_LIBS_SAVED "${BUILD_SHARED_LIBS}")
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build 1DS SDK as static library" FORCE)
 
     # The 1DS SDK CMakeLists.txt expects specific variables on Apple platforms.
     # For iOS: We set BUILD_IOS=YES so the 1DS SDK skips its CURL dependency
@@ -1037,9 +1035,6 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
       endif()
     endif()
 
-    set(BUILD_UNIT_TESTS "${BUILD_UNIT_TESTS_SAVED}" CACHE BOOL "" FORCE)
-    set(BUILD_FUNC_TESTS "${BUILD_FUNC_TESTS_SAVED}" CACHE BOOL "" FORCE)
-    set(BUILD_SAMPLES "${BUILD_SAMPLES_SAVED}" CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS_SAVED}" CACHE BOOL "" FORCE)
   endif()
 endif()
