@@ -6,7 +6,7 @@ The software may collect information about you and your use of the software and 
 ***
 
 ### Private Builds
-No data collection is performed when using your private builds built from source code.
+On Windows, private builds compiled from source perform no data collection. On the non-Windows platforms, telemetry is enabled by default — including in builds compiled from source — so it is present unless you turn it off (see [Disabling Telemetry](#disabling-telemetry)).
 
 ### Official Builds
 ONNX Runtime does not maintain any independent telemetry collection mechanisms outside of what is provided by the platforms it supports. However, where applicable, ONNX Runtime will take advantage of platform-supported telemetry systems to collect trace events with the goal of improving product quality.
