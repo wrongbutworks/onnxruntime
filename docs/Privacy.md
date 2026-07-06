@@ -14,11 +14,17 @@ ONNX Runtime does not maintain any independent telemetry collection mechanisms o
 Telemetry is turned **ON** by default in the official Windows builds distributed in their respective package management repositories ([see here](../README.md#binaries)), where it is implemented with the platform ETW provider. Builds for other platforms can additionally be compiled with the cross-platform 1DS telemetry provider by configuring with `--use_telemetry`; this is **not** enabled in the default builds. Data collection is implemented via 'Platform Telemetry' per vendor platform providers (see [telemetry.h](../onnxruntime/core/platform/telemetry.h)).
 
 #### Technical Details
-The Windows provider uses the [TraceLogging](https://docs.microsoft.com/en-us/windows/win32/tracelogging/trace-logging-about) API for its implementation. This enables ONNX Runtime trace events to be collected by the operating system, and based on user consent, this data may be periodically sent to Microsoft servers following GDPR and privacy regulations for anonymity and data access controls. 
 
-Windows ML and onnxruntime C APIs allow Trace Logging to be turned on/off (see [API pages](../README.md#api-documentation) for details).
-For the ways to disable telemetry, see the [Disabling Telemetry](#disabling-telemetry) section below. 
-There are equivalent APIs in the C#, Python, and Java language bindings as well.
+**Windows.** The Windows provider uses the [TraceLogging](https://docs.microsoft.com/en-us/windows/win32/tracelogging/trace-logging-about) API for its implementation. This enables ONNX Runtime trace events to be collected by the operating system, and based on user consent, this data may be periodically sent to Microsoft servers following GDPR and privacy regulations for anonymity and data access controls. Windows ML and onnxruntime C APIs allow Trace Logging to be turned on/off (see [API pages](../README.md#api-documentation) for details); there are equivalent APIs in the C#, Python, and Java language bindings as well.
+
+**Non-Windows (Linux, macOS, Android, iOS).** When compiled with `--use_telemetry`, these platforms use the cross-platform 1DS SDK ([cpp_client_telemetry](https://github.com/microsoft/cpp_client_telemetry)) to send the same trace events over HTTPS to Microsoft's telemetry backend. The provider is designed to avoid collecting personal data:
+
+- Telemetry is **absent from every default build** and is only present when it is explicitly compiled in (`onnxruntime_USE_TELEMETRY=OFF` is the default).
+- A per-user identifier (a locally generated random UUID) is **hashed before transmission** — the raw identifier never leaves the machine.
+- Free-text error messages are **scrubbed of filesystem paths** (replaced with a `[path]` placeholder) and length-capped before transmission, so usernames and directory layout are not sent.
+- Events are batched in a local offline store and uploaded in the background at low priority.
+
+For the ways to disable telemetry, see the [Disabling Telemetry](#disabling-telemetry) section below.
 
 ### Disabling Telemetry
 
