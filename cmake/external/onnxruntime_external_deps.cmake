@@ -983,16 +983,6 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     onnxruntime_fetchcontent_makeavailable(cpp_client_telemetry)
 
     if(TARGET mat)
-      # On iOS we ship the SDK's bundled sqlite3/zlib headers and pair them with a bundled
-      # zlib target below, so the vendored symbol-renaming `act_z_*` ABI is consistent.
-      # On macOS the system <zlib.h> / <sqlite3.h> (resolved via /usr/local/include from
-      # lib/CMakeLists.txt) is the right header to pair with the system `z` / `sqlite3`
-      # targets that the SDK imports; adding the vendored headers there would produce
-      # an `act_z_*` compile/link mismatch against system libz.
-      if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR}/sqlite)
-        target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR}/zlib)
-      endif()
       # ORT enables -ffast-math globally, which conflicts with
       # std::numeric_limits<double>::infinity() in the 1DS SDK's bundled nlohmann/json.hpp.
       # Also suppress warnings in the 1DS SDK code that ORT treats as errors.
@@ -1002,35 +992,6 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         $<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>
         $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-reorder-ctor>
       )
-      # The vendored zlib headers always prefix exported symbols via names.h (act_z_*),
-      # so iOS cannot link mat against the system zlib. Mirror the SDK's Android build
-      # and provide a bundled zlib target for ORT's FetchContent build.
-      if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT TARGET onnxruntime_mat_zlib_bundled)
-        add_library(onnxruntime_mat_zlib_bundled STATIC
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/adler32.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/compress.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/crc32.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/deflate.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzclose.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzlib.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzread.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzwrite.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/infback.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inffast.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inflate.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inftrees.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/trees.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/uncompr.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/zutil.c"
-        )
-        target_include_directories(onnxruntime_mat_zlib_bundled PUBLIC "${cpp_client_telemetry_SOURCE_DIR}/zlib")
-        target_compile_options(onnxruntime_mat_zlib_bundled PRIVATE
-          -Wno-strict-prototypes
-          -Wno-deprecated-non-prototype
-          -Wno-implicit-function-declaration
-        )
-        target_link_libraries(mat PUBLIC onnxruntime_mat_zlib_bundled)
-      endif()
       # The 1DS SDK's iOS path calls xcodebuild to find the sysroot, which can
       # fail (license not accepted, missing tools) and leave CMAKE_OSX_SYSROOT
       # empty in its scope. Force the correct sysroot via compile options.
