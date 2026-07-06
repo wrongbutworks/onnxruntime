@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 360bf74..a27d947 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -389,7 +389,7 @@ if(MATSDK_USE_VCPKG_DEPS)
+   message(STATUS "Using vcpkg-provided sqlite3, zlib, nlohmann-json")
+ else()
+   # Include repo root to allow includes of vendored sqlite, zlib, and nlohmann
+-  include_directories(${CMAKE_SOURCE_DIR})
++  include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+   message(STATUS "Using vendored sqlite3, zlib, nlohmann-json")
+ endif()
+ 

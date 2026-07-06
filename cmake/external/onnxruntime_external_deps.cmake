@@ -966,19 +966,23 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
       endif()
     endif()
 
+    # Patch the vendored SDK CMakeLists (see cmake/patches/cpp_client_telemetry). Skipped gracefully
+    # when the patch tool is unavailable, matching how other ORT FetchContent deps guard PATCH_COMMAND.
+    if(Patch_FOUND)
+      set(ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND ${Patch_EXECUTABLE} --binary --ignore-whitespace -p1 < ${PROJECT_SOURCE_DIR}/patches/cpp_client_telemetry/cpp_client_telemetry.patch)
+    else()
+      set(ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND "")
+    endif()
     onnxruntime_fetchcontent_declare(
       cpp_client_telemetry
       URL ${DEP_URL_cpp_client_telemetry}
       URL_HASH SHA1=${DEP_SHA1_cpp_client_telemetry}
+      PATCH_COMMAND ${ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND}
       EXCLUDE_FROM_ALL
     )
     onnxruntime_fetchcontent_makeavailable(cpp_client_telemetry)
 
-    # cpp_client_telemetry's CMakeLists.txt uses include_directories(${CMAKE_SOURCE_DIR}) to find
-    # its bundled nlohmann/, sqlite/, and zlib/ headers. When built via FetchContent, CMAKE_SOURCE_DIR
-    # points to ORT's root instead. Fix by adding the actual source dir as an include path.
     if(TARGET mat)
-      target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR})
       # On iOS we ship the SDK's bundled sqlite3/zlib headers and pair them with a bundled
       # zlib target below, so the vendored symbol-renaming `act_z_*` ABI is consistent.
       # On macOS the system <zlib.h> / <sqlite3.h> (resolved via /usr/local/include from
