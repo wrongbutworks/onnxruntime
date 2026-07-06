@@ -12,11 +12,6 @@
 // 1DS SDK
 #include <LogManagerProvider.hpp>
 #include <ILogConfiguration.hpp>
-// ContextFieldsProvider is an internal SDK header (not part of the vcpkg-installed public headers);
-// it is only used on mobile to read the SDK's auto-generated device id.
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-#include <api/ContextFieldsProvider.hpp>
-#endif
 
 #include <unistd.h>
 #include <sys/resource.h>
@@ -218,7 +213,7 @@ class EventBuilder {
 // fixed-width hex, so the same device maps to the same anonymized id across runs and platforms.
 // std::hash is implementation-defined (and may be process-salted), so it is unsuitable here.
 // Ensures raw device identifiers are never sent over the wire.
-static std::string HashDeviceId(const std::string& id) {
+[[maybe_unused]] static std::string HashDeviceId(const std::string& id) {
   uint64_t hash = 14695981039346656037ULL;  // FNV-1a offset basis
   for (unsigned char c : id) {
     hash ^= static_cast<uint64_t>(c);
@@ -366,31 +361,18 @@ void PosixTelemetry::Initialize() {
   // Events are batched and uploaded at a lower cadence.
   log_manager_->SetTransmitProfile(TransmitProfile_BestEffort);
 
-  // Override device ID with hashed version for privacy.
-  // The "c:" prefix tells the backend it's a caller-supplied identifier.
-  auto& ctx = log_manager_->GetSemanticContext();
-  std::string raw_device_id;
+  // Device ID.
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-  // Mobile: read SDK's auto-generated platform device ID (e.g., identifierForVendor
-  // on iOS, ANDROID_ID on Android) and hash it before sending.
-  auto* provider = static_cast<ContextFieldsProvider*>(&ctx);
-  auto& fields = provider->GetCommonFields();
-  auto it = fields.find(COMMONFIELDS_DEVICE_ID);
-  if (it != fields.end()) {
-    raw_device_id = it->second.to_string();
-  }
-  // If the SDK has not populated a platform device ID, fall back to our own persistent UUID so the
-  // SDK's raw auto-generated identifier is never transmitted un-hashed.
-  if (raw_device_id.empty()) {
-    raw_device_id = DeviceId::Instance().GetValue();
-  }
+  // Mobile (Android/iOS): leave the device ID to the 1DS SDK, which uses the platform's own
+  // identifier (identifierForVendor on iOS, ANDROID_ID on Android). Do not override it.
 #else
-  // Desktop: use our custom persistent UUID.
-  raw_device_id = DeviceId::Instance().GetValue();
-#endif
+  // Desktop: send a hashed version of our persistent UUID (the "c:" prefix marks it as a
+  // caller-supplied identifier); the raw UUID itself is never transmitted.
+  std::string raw_device_id = DeviceId::Instance().GetValue();
   if (!raw_device_id.empty()) {
-    ctx.SetDeviceId("c:" + HashDeviceId(raw_device_id));
+    log_manager_->GetSemanticContext().SetDeviceId("c:" + HashDeviceId(raw_device_id));
   }
+#endif
 
   // Set application information as logger context (attached to all events)
   logger->SetContext("AppName", "ONNXRuntime");

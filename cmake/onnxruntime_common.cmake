@@ -264,9 +264,8 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     # path links the imported MSTelemetry::mat target, which is exportable and unaffected.
     target_link_libraries(onnxruntime_common PRIVATE $<BUILD_INTERFACE:mat>)
     # mat propagates its public include dir as a normal (non-SYSTEM) include, so onnxruntime_common's
-    # -Wall -Wextra -Werror would apply to the SDK's public headers (they trip -Werror=unused-parameter
-    # in NullObjects.hpp / LogManagerProvider.hpp). Re-add the SDK include dirs as SYSTEM to exempt
-    # them; lib is also required for the SDK-internal <api/ContextFieldsProvider.hpp>.
+    # -Wall -Wextra -Werror would apply to the SDK's headers (they trip -Werror=unused-parameter in
+    # NullObjects.hpp / LogManagerProvider.hpp). Re-add the SDK include dirs as SYSTEM to exempt them.
     if(DEFINED cpp_client_telemetry_SOURCE_DIR)
       target_include_directories(onnxruntime_common SYSTEM PRIVATE
         ${cpp_client_telemetry_SOURCE_DIR}/lib/include/public
