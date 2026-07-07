@@ -1,0 +1,29 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 360bf74..a27d947 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -389,7 +389,7 @@ if(MATSDK_USE_VCPKG_DEPS)
+   message(STATUS "Using vcpkg-provided sqlite3, zlib, nlohmann-json")
+ else()
+   # Include repo root to allow includes of vendored sqlite, zlib, and nlohmann
+-  include_directories(${CMAKE_SOURCE_DIR})
++  include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+   message(STATUS "Using vendored sqlite3, zlib, nlohmann-json")
+ endif()
+
+diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
+index 0d41618..7f770e1 100644
+--- a/lib/CMakeLists.txt
++++ b/lib/CMakeLists.txt
+@@ -406,7 +406,10 @@ if(MATSDK_USE_VCPKG_DEPS)
+   )
+ else()
+   # Legacy mode: use vendored or system-installed deps
+-  if(CMAKE_SYSTEM_NAME STREQUAL "Android")
++  # iOS shares the Android bundled-deps path: its vendored zlib headers rename exports
++  # to act_z_* (names.h), so the system zlib cannot satisfy them. Build zlib and sqlite3
++  # from the bundled source on both platforms.
++  if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+     # Android NDK has no system sqlite3 or zlib — build from bundled source.
+     add_library(sqlite3_bundled STATIC "${CMAKE_CURRENT_SOURCE_DIR}/../sqlite/sqlite3.c")
+     target_include_directories(sqlite3_bundled PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../sqlite")

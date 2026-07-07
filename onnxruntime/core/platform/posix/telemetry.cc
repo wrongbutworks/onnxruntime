@@ -3,6 +3,7 @@
 
 #include "core/platform/posix/telemetry.h"
 #include "core/platform/posix/device_id.h"
+#include "core/platform/telemetry_redaction.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -11,11 +12,6 @@
 // 1DS SDK
 #include <LogManagerProvider.hpp>
 #include <ILogConfiguration.hpp>
-// ContextFieldsProvider is an internal SDK header (not part of the vcpkg-installed public headers);
-// it is only used on mobile to read the SDK's auto-generated device id.
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-#include <api/ContextFieldsProvider.hpp>
-#endif
 
 #include <unistd.h>
 #include <sys/resource.h>
@@ -28,6 +24,7 @@
 #include <fstream>
 #endif
 
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <thread>
@@ -65,8 +62,6 @@ std::atomic<::Microsoft::Applications::Events::ILogger*> PosixTelemetry::logger_
 std::unique_ptr<::Microsoft::Applications::Events::ILogConfiguration> PosixTelemetry::config_;
 std::atomic<bool> PosixTelemetry::enabled_{true};
 std::atomic<uint32_t> PosixTelemetry::projection_{0};
-std::atomic<unsigned char> PosixTelemetry::level_{0};
-std::atomic<uint64_t> PosixTelemetry::keyword_{0};
 std::atomic<bool> PosixTelemetry::process_info_logged_{false};
 std::atomic<uint32_t> PosixTelemetry::system_metrics_sample_counter_{0};
 
@@ -74,14 +69,14 @@ std::atomic<uint32_t> PosixTelemetry::system_metrics_sample_counter_{0};
 //
 // The default below is a throwaway ingestion key so that anyone building ONNX Runtime themselves
 // gets working telemetry by default; it carries no secret and can simply be revoked if abused.
-// Official builds override it via the onnxruntime_1DS_TENANT_TOKEN CMake variable (sourced from a CI
+// Official builds override it via the onnxruntime_TELEMETRY_TENANT_TOKEN CMake variable (sourced from a CI
 // secret), which CMake writes into the generated onnxruntime_telemetry_tenant_token.h included above
 // — in the build tree, not on the compiler command line — so the production token is never committed
 // to source and stays out of compile_commands.json / build logs.
-#ifndef ORT_1DS_TENANT_TOKEN
-#define ORT_1DS_TENANT_TOKEN "5ad963bd4b3a4118a481401cc0211875-da8e8657-47d4-4ed7-ab39-7886e136f53b-6988"
+#ifndef ORT_TELEMETRY_TENANT_TOKEN
+#define ORT_TELEMETRY_TENANT_TOKEN "5ad963bd4b3a4118a481401cc0211875-da8e8657-47d4-4ed7-ab39-7886e136f53b-6988"
 #endif
-constexpr const char* TENANT_TOKEN = ORT_1DS_TENANT_TOKEN;
+constexpr const char* TENANT_TOKEN = ORT_TELEMETRY_TENANT_TOKEN;
 
 // Event priority mapping (1DS priorities)
 enum class EventPriority {
@@ -116,6 +111,9 @@ class EventBuilder {
 
     // Privacy data tags for GDPR compliance classification
     props_.SetProperty(COMMONFIELDS_EVENT_PRIVTAGS, static_cast<int64_t>(privacy_tags));
+
+    // Language projection identifier set by the active binding (see SetLanguageProjection).
+    props_.SetProperty("projection", static_cast<int64_t>(PosixTelemetry::projection_.load()));
   }
 
   // Override the default schemaVersion (0) to match the Windows provider's per-event versions.
@@ -208,12 +206,6 @@ class EventBuilder {
     return *this;
   }
 
-  // Add common platform/device context
-  EventBuilder& AddCommonContext(const PosixTelemetry* telemetry) {
-    props_.SetProperty("projection", static_cast<int64_t>(telemetry->projection_.load()));
-    return *this;
-  }
-
   EventProperties Build() { return std::move(props_); }
 };
 
@@ -221,7 +213,7 @@ class EventBuilder {
 // fixed-width hex, so the same device maps to the same anonymized id across runs and platforms.
 // std::hash is implementation-defined (and may be process-salted), so it is unsuitable here.
 // Ensures raw device identifiers are never sent over the wire.
-static std::string HashDeviceId(const std::string& id) {
+[[maybe_unused]] static std::string HashDeviceId(const std::string& id) {
   uint64_t hash = 14695981039346656037ULL;  // FNV-1a offset basis
   for (unsigned char c : id) {
     hash ^= static_cast<uint64_t>(c);
@@ -290,6 +282,20 @@ void PosixTelemetry::LogEventAsync(Microsoft::Applications::Events::EventPropert
 void PosixTelemetry::Initialize() {
   std::unique_lock<std::shared_mutex> lock(mutex_);
 
+  // Environment opt-out: ORT_TELEMETRY_DISABLED set to a truthy value (1/true/yes/on/y,
+  // case-insensitive) disables telemetry at runtime without recompiling and skips creating the 1DS
+  // uploader entirely.
+  if (const char* env = std::getenv("ORT_TELEMETRY_DISABLED"); env != nullptr) {
+    std::string value(env);
+    for (char& ch : value) {
+      ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (value == "1" || value == "true" || value == "yes" || value == "on" || value == "y") {
+      enabled_.store(false, std::memory_order_release);
+      return;
+    }
+  }
+
   // NOTE: On Android, the Java layer must be initialized before calling this:
   //   System.loadLibrary("maesdk");
   //   new HttpClient(getApplicationContext());
@@ -304,7 +310,9 @@ void PosixTelemetry::Initialize() {
   config[CFG_STR_COLLECTOR_URL] = "https://mobile.events.data.microsoft.com/OneCollector/1.0";
   config[CFG_INT_TRACE_LEVEL_MASK] = 0;                      // Disable SDK internal logging
   config[CFG_INT_SDK_MODE] = SdkModeTypes::SdkModeTypes_CS;  // Common Schema 4.0 mode
-  config[CFG_INT_MAX_TEARDOWN_TIME] = 10;                    // 10 seconds max for shutdown
+  // Do not block process teardown to upload; persisted events are sent on the next run. 0 keeps
+  // Shutdown non-blocking and avoids adding exit latency to host apps.
+  config[CFG_INT_MAX_TEARDOWN_TIME] = 0;
 
   // Configure cache for offline scenarios — use same directory as device ID storage
   {
@@ -326,9 +334,15 @@ void PosixTelemetry::Initialize() {
   // Create log manager via LogManagerProvider (recommended for production use,
   // per LogManager_Creation_and_Lifecycle_Management.md).
   status_t status;
-  log_manager_ = LogManagerProvider::CreateLogManager(*config_, status);
+  log_manager_ = LogManagerProvider::CreateLogManager("OnnxRuntime", true, *config_, status);
   if (status != STATUS_SUCCESS || !log_manager_) {
     ORT_TELEMETRY_WARN("Failed to create telemetry LogManager, status: " << status);
+    // CreateLogManager can return a live manager alongside a non-success status; release it (and
+    // drop our reference) before destroying config_, which the manager holds a reference to.
+    if (log_manager_ != nullptr) {
+      LogManagerProvider::Release(*config_);
+      log_manager_ = nullptr;
+    }
     config_.reset();
     return;
   }
@@ -347,26 +361,18 @@ void PosixTelemetry::Initialize() {
   // Events are batched and uploaded at a lower cadence.
   log_manager_->SetTransmitProfile(TransmitProfile_BestEffort);
 
-  // Override device ID with hashed version for privacy.
-  // The "c:" prefix tells the backend it's a caller-supplied identifier.
-  auto& ctx = log_manager_->GetSemanticContext();
-  std::string raw_device_id;
+  // Device ID.
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-  // Mobile: read SDK's auto-generated platform device ID (e.g., identifierForVendor
-  // on iOS, ANDROID_ID on Android) and hash it before sending.
-  auto* provider = static_cast<ContextFieldsProvider*>(&ctx);
-  auto& fields = provider->GetCommonFields();
-  auto it = fields.find(COMMONFIELDS_DEVICE_ID);
-  if (it != fields.end()) {
-    raw_device_id = it->second.to_string();
-  }
+  // Mobile (Android/iOS): leave the device ID to the 1DS SDK, which uses the platform's own
+  // identifier (identifierForVendor on iOS, ANDROID_ID on Android). Do not override it.
 #else
-  // Desktop: use our custom persistent UUID.
-  raw_device_id = DeviceId::Instance().GetValue();
-#endif
+  // Desktop: send a hashed version of our persistent UUID (the "c:" prefix marks it as a
+  // caller-supplied identifier); the raw UUID itself is never transmitted.
+  std::string raw_device_id = DeviceId::Instance().GetValue();
   if (!raw_device_id.empty()) {
-    ctx.SetDeviceId("c:" + HashDeviceId(raw_device_id));
+    log_manager_->GetSemanticContext().SetDeviceId("c:" + HashDeviceId(raw_device_id));
   }
+#endif
 
   // Set application information as logger context (attached to all events)
   logger->SetContext("AppName", "ONNXRuntime");
@@ -581,11 +587,12 @@ bool PosixTelemetry::IsEnabled() const {
 }
 
 unsigned char PosixTelemetry::Level() const {
-  return level_;
+  // POSIX telemetry has no ETW-style level/keyword control plane; report zero.
+  return 0;
 }
 
 uint64_t PosixTelemetry::Keyword() const {
-  return keyword_;
+  return 0;
 }
 
 void PosixTelemetry::LogProcessInfo() const {
@@ -602,7 +609,6 @@ void PosixTelemetry::LogProcessInfo() const {
 
   auto builder = EventBuilder("ProcessInfo", EventPriority::CRITICAL,
                               PDT_DeviceConnectivityAndConfiguration | PDT_SoftwareSetupAndInventory)
-                     .AddCommonContext(this)
                      .AddString("runtimeVersion", ORT_VERSION)
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
                      .AddString("DeviceInfo.Status", "Mobile")
@@ -627,7 +633,6 @@ void PosixTelemetry::LogSessionCreationStart(uint32_t session_id) const {
   auto event = EventBuilder("SessionCreationStart", EventPriority::CRITICAL,
                             PDT_SoftwareSetupAndInventory | PDT_ProductAndServicePerformance)
                    .SetSchemaVersion(2)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .Build();
 
@@ -641,7 +646,6 @@ void PosixTelemetry::LogEvaluationStop(uint32_t session_id) const {
 
   auto event = EventBuilder("EvaluationStop", EventPriority::NORMAL,
                             PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .Build();
 
@@ -658,7 +662,6 @@ void PosixTelemetry::LogEvaluationStart(uint32_t session_id) const {
 
   auto event = EventBuilder("EvaluationStart", EventPriority::NORMAL,
                             PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .Build();
 
@@ -693,7 +696,6 @@ void PosixTelemetry::LogSessionCreation(
 
   auto builder = EventBuilder(std::move(event_name), EventPriority::CRITICAL,
                               PDT_SoftwareSetupAndInventory | PDT_ProductAndServicePerformance)
-                     .AddCommonContext(this)
                      .AddUInt32("sessionId", session_id)
                      .AddInt64("irVersion", ir_version)
                      .AddString("modelProducerName", model_producer_name)
@@ -732,7 +734,6 @@ void PosixTelemetry::LogCompileModelStart(
   auto event = EventBuilder("CompileModelStart", EventPriority::NORMAL,
                             PDT_SoftwareSetupAndInventory | PDT_ProductAndServicePerformance)
                    .SetSchemaVersion(1)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddString("inputSource", input_source)
                    .AddString("outputTarget", output_target)
@@ -758,12 +759,11 @@ void PosixTelemetry::LogCompileModelComplete(
 
   auto event = EventBuilder("CompileModelComplete", EventPriority::NORMAL,
                             PDT_SoftwareSetupAndInventory | PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddBool("success", success)
                    .AddUInt32("errorCode", error_code)
                    .AddUInt32("errorCategory", error_category)
-                   .AddString("errorMessage", error_message)
+                   .AddString("errorMessage", ScrubErrorMessage(error_message))
                    .Build();
 
   LogEventAsync(std::move(event));
@@ -786,11 +786,10 @@ void PosixTelemetry::LogRuntimeError(
   auto event = EventBuilder("RuntimeError", EventPriority::HIGH,
                             PDT_ProductAndServicePerformance)
                    .SetSchemaVersion(1)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddInt32("errorCode", static_cast<int32_t>(status.Code()))
                    .AddInt32("errorCategory", static_cast<int32_t>(status.Category()))
-                   .AddString("errorMessage", status.ErrorMessage())
+                   .AddString("errorMessage", ScrubErrorMessage(status.ErrorMessage()))
                    .AddString("file", std::string(file_view))
                    .AddString("function", function ? function : "")
                    .AddUInt32("line", line)
@@ -808,11 +807,10 @@ void PosixTelemetry::LogRuntimeInferenceError(uint32_t session_id, const common:
 
   auto event = EventBuilder("RuntimeInferenceError", EventPriority::HIGH,
                             PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddInt32("errorCode", static_cast<int32_t>(status.Code()))
                    .AddInt32("errorCategory", static_cast<int32_t>(status.Category()))
-                   .AddString("errorMessage", status.ErrorMessage())
+                   .AddString("errorMessage", ScrubErrorMessage(status.ErrorMessage()))
                    .AddString("executionProviderVersions", ep_versions)
                    .AddString("executionProviderDeviceTypes", ep_device_types)
                    .AddString("runtimeVersion", ORT_VERSION)
@@ -832,7 +830,6 @@ void PosixTelemetry::LogRuntimePerf(
   auto event = EventBuilder("RuntimePerf", EventPriority::NORMAL,
                             PDT_ProductAndServicePerformance)
                    .SetSchemaVersion(1)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddUInt32("totalRunsSinceLast", total_runs_since_last)
                    .AddInt64("totalRunDurationSinceLast", total_run_duration_since_last)
@@ -867,7 +864,6 @@ void PosixTelemetry::LogAutoEpSelection(
 
   auto event = EventBuilder("EpAutoSelection", EventPriority::NORMAL,
                             PDT_SoftwareSetupAndInventory)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddString("selectionPolicy", selection_policy)
                    .AddStringList("requestedExecutionProviderIds", requested_execution_provider_ids)
@@ -889,7 +885,6 @@ void PosixTelemetry::LogProviderOptions(
 
   auto event = EventBuilder(std::move(event_name), EventPriority::NORMAL,
                             PDT_SoftwareSetupAndInventory)
-                   .AddCommonContext(this)
                    .AddString("providerId", provider_id)
                    .AddString("providerOptions", provider_options_string)
                    .Build();
@@ -905,7 +900,6 @@ void PosixTelemetry::LogModelLoadStart(uint32_t session_id) const {
   auto event = EventBuilder("ModelLoadStart", EventPriority::NORMAL,
                             PDT_ProductAndServiceUsage)
                    .SetSchemaVersion(1)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .Build();
 
@@ -919,12 +913,11 @@ void PosixTelemetry::LogModelLoadEnd(uint32_t session_id, const common::Status& 
 
   auto event = EventBuilder("ModelLoadEnd", EventPriority::NORMAL,
                             PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddBool("isSuccess", status.IsOK())
                    .AddInt32("errorCode", static_cast<int32_t>(status.Code()))
                    .AddInt32("errorCategory", static_cast<int32_t>(status.Category()))
-                   .AddString("errorMessage", status.ErrorMessage())
+                   .AddString("errorMessage", ScrubErrorMessage(status.ErrorMessage()))
                    .Build();
 
   LogEventAsync(std::move(event));
@@ -937,12 +930,11 @@ void PosixTelemetry::LogSessionCreationEnd(uint32_t session_id, const common::St
 
   auto event = EventBuilder("SessionCreationEnd", EventPriority::CRITICAL,
                             PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddBool("isSuccess", status.IsOK())
                    .AddInt32("errorCode", static_cast<int32_t>(status.Code()))
                    .AddInt32("errorCategory", static_cast<int32_t>(status.Category()))
-                   .AddString("errorMessage", status.ErrorMessage())
+                   .AddString("errorMessage", ScrubErrorMessage(status.ErrorMessage()))
                    .Build();
 
   LogEventAsync(std::move(event));
@@ -967,7 +959,6 @@ void PosixTelemetry::LogEpDeviceUsage(
   auto event = EventBuilder("EpDeviceUsage", EventPriority::NORMAL,
                             PDT_ProductAndServiceUsage)
                    .SetSchemaVersion(1)
-                   .AddCommonContext(this)
                    .AddUInt32("sessionId", session_id)
                    .AddString("executionProviderType", ep_type)
                    .AddString("hardwareDeviceType", hardware_device_type)
@@ -992,7 +983,6 @@ void PosixTelemetry::LogRegisterEpLibraryStart(const std::string& registration_n
   auto event = EventBuilder("RegisterEpLibraryStart", EventPriority::NORMAL,
                             PDT_ProductAndServiceUsage)
                    .SetSchemaVersion(1)
-                   .AddCommonContext(this)
                    .AddString("registrationName", registration_name)
                    .Build();
 
@@ -1007,12 +997,11 @@ void PosixTelemetry::LogRegisterEpLibraryEnd(const std::string& registration_nam
 
   auto event = EventBuilder("RegisterEpLibraryEnd", EventPriority::NORMAL,
                             PDT_ProductAndServicePerformance)
-                   .AddCommonContext(this)
                    .AddString("registrationName", registration_name)
                    .AddBool("isSuccess", status.IsOK())
                    .AddInt32("errorCode", static_cast<int32_t>(status.Code()))
                    .AddInt32("errorCategory", static_cast<int32_t>(status.Category()))
-                   .AddString("errorMessage", status.ErrorMessage())
+                   .AddString("errorMessage", ScrubErrorMessage(status.ErrorMessage()))
                    .Build();
 
   LogEventAsync(std::move(event));
@@ -1026,7 +1015,6 @@ void PosixTelemetry::LogRegisterEpLibraryWithLibPath(const std::string& registra
 
   auto event = EventBuilder("RegisterEpLibraryWithLibPath", EventPriority::NORMAL,
                             PDT_ProductAndServiceUsage)
-                   .AddCommonContext(this)
                    .AddString("registrationName", registration_name)
                    .AddString("libPath", lib_path)
                    .Build();
@@ -1057,7 +1045,6 @@ void PosixTelemetry::LogSystemMetrics(uint32_t session_id) const {
 
     auto event = EventBuilder("SystemMetrics", EventPriority::NORMAL,
                               PDT_ProductAndServicePerformance | PDT_DeviceConnectivityAndConfiguration)
-                     .AddCommonContext(this)
                      .AddUInt32("sessionId", session_id)
                      .AddInt64("maxRssKb", max_rss_kb)
                      .AddInt64("userCpuTimeSec", usage.ru_utime.tv_sec)

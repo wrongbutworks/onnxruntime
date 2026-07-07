@@ -80,9 +80,21 @@ std::string ConvertWideStringToUtf8(const std::wstring& wide) {
 }
 
 // Parse the command line for -s (service name) and -k (service group) arguments.
-// These are svchost.exe conventions and may not be present for all services.
+// These are svchost.exe conventions, so this only applies when the host process image is
+// svchost.exe; for any other process these flags are unrelated and their values are not collected.
 std::string GetServiceNamesFromCommandLine() {
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP)
+  // The -s/-k service-name convention is specific to svchost.exe. Restrict command-line parsing to
+  // svchost so a same-named flag in an unrelated host process does not leak its argument value.
+  wchar_t module_path[MAX_PATH];
+  DWORD module_path_len = ::GetModuleFileNameW(nullptr, module_path, MAX_PATH);
+  if (module_path_len == 0 || module_path_len >= MAX_PATH)
+    return {};
+  const wchar_t* image_name = ::wcsrchr(module_path, L'\\');
+  image_name = (image_name != nullptr) ? image_name + 1 : module_path;
+  if (_wcsicmp(image_name, L"svchost.exe") != 0)
+    return {};
+
   LPCWSTR cmd_line = ::GetCommandLineW();
   if (cmd_line == nullptr)
     return {};

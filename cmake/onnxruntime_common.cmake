@@ -159,15 +159,15 @@ if (onnxruntime_USE_TELEMETRY)
   if(WIN32)
     set_target_properties(onnxruntime_common PROPERTIES COMPILE_FLAGS "/FI${ONNXRUNTIME_INCLUDE_DIR}/core/platform/windows/TraceLoggingConfigPrivate.h")
   else()
-    target_compile_definitions(onnxruntime_common PRIVATE USE_1DS_TELEMETRY)
+    target_compile_definitions(onnxruntime_common PRIVATE USE_POSIX_TELEMETRY)
     # The optional tenant-token override is emitted into a generated header in the build tree rather
     # than onto the compiler command line, so an injected token (sourced from a CI secret) does not
-    # leak into compile_commands.json or build logs. DIY builds leave onnxruntime_1DS_TENANT_TOKEN
+    # leak into compile_commands.json or build logs. DIY builds leave onnxruntime_TELEMETRY_TENANT_TOKEN
     # empty, so the header defines nothing and telemetry.cc uses its throwaway default.
-    if(onnxruntime_1DS_TENANT_TOKEN)
-      set(ONNXRUNTIME_1DS_TENANT_TOKEN_DEFINE "#define ORT_1DS_TENANT_TOKEN \"${onnxruntime_1DS_TENANT_TOKEN}\"")
+    if(onnxruntime_TELEMETRY_TENANT_TOKEN)
+      set(ONNXRUNTIME_TELEMETRY_TENANT_TOKEN_DEFINE "#define ORT_TELEMETRY_TENANT_TOKEN \"${onnxruntime_TELEMETRY_TENANT_TOKEN}\"")
     else()
-      set(ONNXRUNTIME_1DS_TENANT_TOKEN_DEFINE "")
+      set(ONNXRUNTIME_TELEMETRY_TENANT_TOKEN_DEFINE "")
     endif()
     set(_ort_telemetry_gen_dir "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime_telemetry")
     configure_file(
@@ -256,51 +256,32 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     if(onnxruntime_TELEMETRY_SHARED_SDK)
       message(FATAL_ERROR "onnxruntime_TELEMETRY_SHARED_SDK requires the vcpkg cpp-client-telemetry port (build with --use_vcpkg); it is not supported with the FetchContent fallback.")
     endif()
+    # mat is a FetchContent target. Link it directly for in-tree builds, and export/install it
+    # below for static package consumers on Apple/mobile where telemetry is shipped as archives.
     target_link_libraries(onnxruntime_common PRIVATE mat)
-    # cpp_client_telemetry uses include_directories() (directory-scoped) rather than
-    # target_include_directories(), so include paths don't propagate via target_link_libraries.
-    # Add them explicitly for onnxruntime_common.
+    # mat propagates its public include dir as a normal (non-SYSTEM) include, so onnxruntime_common's
+    # -Wall -Wextra -Werror would apply to the SDK's headers (they trip -Werror=unused-parameter in
+    # NullObjects.hpp / LogManagerProvider.hpp). Re-add the SDK include dirs as SYSTEM to exempt them.
     if(DEFINED cpp_client_telemetry_SOURCE_DIR)
-      target_include_directories(onnxruntime_common PRIVATE
+      target_include_directories(onnxruntime_common SYSTEM PRIVATE
         ${cpp_client_telemetry_SOURCE_DIR}/lib/include/public
         ${cpp_client_telemetry_SOURCE_DIR}/lib/include/mat
         ${cpp_client_telemetry_SOURCE_DIR}/lib
       )
     endif()
-    # Platform-specific system libraries required by the 1DS SDK
-    if(APPLE)
-      if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        target_link_libraries(onnxruntime_common PRIVATE
-          "-framework CoreFoundation"
-          "-framework Security"
-          sqlite3
-        )
-      else()
-        target_link_libraries(onnxruntime_common PRIVATE
-          "-framework CoreFoundation"
-          "-framework Security"
-          z
-          sqlite3
-        )
-      endif()
-    elseif(ANDROID)
-      target_link_libraries(onnxruntime_common PRIVATE z log)
-    elseif(UNIX)
-      target_link_libraries(onnxruntime_common PRIVATE
-        curl
-        z
-        sqlite3
-      )
-    endif()
-
+    # mat links its own dependencies and platform frameworks.
     if (NOT onnxruntime_BUILD_SHARED_LIB)
       install(TARGETS mat EXPORT ${PROJECT_NAME}Targets
               ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
               LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
               RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
               FRAMEWORK DESTINATION ${CMAKE_INSTALL_BINDIR})
-      if(TARGET onnxruntime_mat_zlib_bundled)
-        install(TARGETS onnxruntime_mat_zlib_bundled EXPORT ${PROJECT_NAME}Targets
+      if(TARGET sqlite3_bundled)
+        install(TARGETS sqlite3_bundled EXPORT ${PROJECT_NAME}Targets
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+      endif()
+      if(TARGET zlib_bundled)
+        install(TARGETS zlib_bundled EXPORT ${PROJECT_NAME}Targets
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
       endif()
     endif()
