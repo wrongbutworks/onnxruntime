@@ -37,12 +37,71 @@ inline bool LooksLikePath(std::string_view token) {
 // Maximum transmitted error-message length, applied after scrubbing to bound telemetry payload size.
 inline constexpr size_t kMaxTelemetryErrorMessageLength = 256;
 
+namespace telemetry_detail {
+
+// Replace a token that LooksLikePath() with a "[path]" placeholder that keeps the last two path
+// segments (the immediate parent directory and file name) for debuggability. The kept tail is clamped
+// so it can never include a home-directory user name — the "<user>" in ~/, /home/<user>/,
+// /Users/<user>/, /root/, or C:\Users\<user>\ — which is the value the redaction exists to hide.
+// The home markers are matched anywhere in the token, so an embedded path (e.g. "input:/home/u/f")
+// is guarded too.
+inline std::string RedactPathToken(std::string_view token) {
+  const auto is_sep = [](char c) { return c == '/' || c == '\\'; };
+
+  // safe_start: no content before this index may be kept. Advance it past any home prefix + user name.
+  size_t safe_start = 0;
+  const auto guard = [&](std::string_view marker, bool has_user) {
+    for (size_t p = token.find(marker); p != std::string_view::npos; p = token.find(marker, p + 1)) {
+      size_t e = p + marker.size();
+      if (has_user) {
+        while (e < token.size() && !is_sep(token[e])) {
+          ++e;  // consume <user>, stopping at its trailing separator (or end of token)
+        }
+      } else {
+        --e;  // markers with no user segment: keep from the marker's own trailing separator
+      }
+      if (e > safe_start) {
+        safe_start = e;
+      }
+    }
+  };
+  guard("/home/", true);
+  guard("/Users/", true);
+  guard("/users/", true);
+  guard("\\Users\\", true);
+  guard("\\users\\", true);
+  guard("/root/", false);
+  guard("~/", false);
+  guard("~\\", false);
+
+  // tail_start: start of the last two segments (the second-to-last separator). With a single
+  // separator only one segment is kept; with none, nothing beyond "[path]" is kept.
+  size_t tail_start = token.size();
+  const size_t last_sep = token.find_last_of("/\\");
+  if (last_sep != std::string_view::npos) {
+    const size_t prev =
+        (last_sep == 0) ? std::string_view::npos : token.find_last_of("/\\", last_sep - 1);
+    tail_start = (prev == std::string_view::npos) ? last_sep : prev;
+  }
+
+  const size_t keep_from = (tail_start > safe_start) ? tail_start : safe_start;
+  std::string out = "[path]";
+  if (keep_from < token.size()) {
+    out.append(token.data() + keep_from, token.size() - keep_from);
+  }
+  return out;
+}
+
+}  // namespace telemetry_detail
+
 // Scrub filesystem paths out of a free-text error string before transmission and cap its length.
-// Each whitespace-delimited token that looks like a path is replaced with a "[path]" placeholder, so
-// load/runtime exceptions don't ship the user's config/model path (e.g. C:\Users\<name>\... or
-// /home/<name>/...) and thereby the username and directory layout.
+// Each whitespace-delimited token that looks like a path is replaced with a "[path]" placeholder that
+// retains the last two path segments (parent directory + file name) for debuggability, while still
+// redacting the sensitive prefix — in particular any home directory + user name (e.g. /home/<name>/
+// or C:\Users\<name>\), which is never kept.
 inline std::string ScrubErrorMessage(std::string_view msg) {
   using telemetry_detail::LooksLikePath;
+  using telemetry_detail::RedactPathToken;
 
   std::string out;
   out.reserve(msg.size());
@@ -60,7 +119,7 @@ inline std::string ScrubErrorMessage(std::string_view msg) {
     }
     const std::string_view token = msg.substr(start, i - start);
     if (LooksLikePath(token)) {
-      out += "[path]";
+      out += RedactPathToken(token);
     } else {
       out.append(token.data(), token.size());
     }
