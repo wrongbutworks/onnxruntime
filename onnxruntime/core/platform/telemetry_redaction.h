@@ -48,10 +48,19 @@ namespace telemetry_detail {
 inline std::string RedactPathToken(std::string_view token) {
   const auto is_sep = [](char c) { return c == '/' || c == '\\'; };
 
+  // Case- and separator-insensitive marker matching: home directories on Windows/macOS are
+  // case-insensitive, and one path may mix '/' and '\'. Markers are searched in a normalized copy
+  // (lowercased, all separators as '/'); ASCII lowercasing preserves length, so its indices map 1:1
+  // to the original token, from which the separators and the kept tail are read.
+  std::string norm(token);
+  for (char& c : norm) {
+    c = (c == '\\') ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+
   // safe_start: no content before this index may be kept. Advance it past any home prefix + user name.
   size_t safe_start = 0;
   const auto guard = [&](std::string_view marker, bool has_user) {
-    for (size_t p = token.find(marker); p != std::string_view::npos; p = token.find(marker, p + 1)) {
+    for (size_t p = norm.find(marker); p != std::string::npos; p = norm.find(marker, p + 1)) {
       size_t e = p + marker.size();
       if (has_user) {
         while (e < token.size() && !is_sep(token[e])) {
@@ -66,13 +75,9 @@ inline std::string RedactPathToken(std::string_view token) {
     }
   };
   guard("/home/", true);
-  guard("/Users/", true);
-  guard("/users/", true);
-  guard("\\Users\\", true);
-  guard("\\users\\", true);
+  guard("/users/", true);  // normalized token also matches /Users/, \Users\, \users\, mixed forms
   guard("/root/", false);
-  guard("~/", false);
-  guard("~\\", false);
+  guard("~/", false);      // normalized token also matches ~\.
 
   // tail_start: start of the last two segments (the second-to-last separator). With a single
   // separator only one segment is kept; with none, nothing beyond "[path]" is kept.

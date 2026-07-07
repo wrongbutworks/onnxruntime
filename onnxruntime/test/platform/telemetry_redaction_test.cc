@@ -29,6 +29,18 @@ TEST(TelemetryRedactionTest, KeepsLastTwoSegmentsAndGuardsHomeUsername) {
   EXPECT_EQ(ScrubErrorMessage("C:\\Users\\bob\\model.onnx"), "[path]\\model.onnx");
 }
 
+TEST(TelemetryRedactionTest, GuardsHomeUsernameAcrossCaseAndSeparatorVariants) {
+  // Home directories are case-insensitive on Windows/macOS and a single path may mix '/' and '\'.
+  // The user name must never be the retained second-to-last segment regardless of the case or
+  // separator used at the home boundary -- each exact result below contains no user name.
+  EXPECT_EQ(ScrubErrorMessage("C:\\UsErS\\alice\\model.onnx"), "[path]\\model.onnx");
+  EXPECT_EQ(ScrubErrorMessage("C:\\Users/bob\\model.onnx"), "[path]\\model.onnx");
+  EXPECT_EQ(ScrubErrorMessage("C:/Users\\bob\\model.onnx"), "[path]\\model.onnx");
+  EXPECT_EQ(ScrubErrorMessage("/UsErS/alice/model.onnx"), "[path]/model.onnx");
+  // A deep mixed-separator path still keeps the last two segments while guarding the user name.
+  EXPECT_EQ(ScrubErrorMessage("C:\\Users/bob/proj\\model.onnx"), "[path]/proj\\model.onnx");
+}
+
 TEST(TelemetryRedactionTest, WindowsDriveAndUncReplaced) {
   EXPECT_EQ(ScrubErrorMessage("Load C:\\proj\\bin\\m.onnx failed"), "Load [path]\\bin\\m.onnx failed");
   EXPECT_EQ(ScrubErrorMessage("open D:/data/secret/model.onnx"), "open [path]/secret/model.onnx");
