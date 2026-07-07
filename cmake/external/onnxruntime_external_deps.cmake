@@ -981,12 +981,13 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     # points to ORT's root instead. Fix by adding the actual source dir as an include path.
     if(TARGET mat)
       target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR})
-      # On iOS we ship the SDK's bundled sqlite3/zlib headers and pair them with a bundled
-      # zlib target below, so the vendored symbol-renaming `act_z_*` ABI is consistent.
-      # On macOS the system <zlib.h> / <sqlite3.h> (resolved via /usr/local/include from
-      # lib/CMakeLists.txt) is the right header to pair with the system `z` / `sqlite3`
-      # targets that the SDK imports; adding the vendored headers there would produce
-      # an `act_z_*` compile/link mismatch against system libz.
+      # On iOS the 1DS SDK consumes vendored sqlite3/zlib headers. In the pinned legacy
+      # FetchContent path it still links against system sqlite3 and zlib, which is fine for
+      # sqlite3 but wrong for zlib because the vendored headers rename symbols to `act_z_*`.
+      # Add the vendored header directories only on iOS and pair them with a bundled zlib
+      # target below. On macOS the system <zlib.h> / <sqlite3.h> (resolved via /usr/local/include
+      # from lib/CMakeLists.txt) is the right header set to pair with the system `z` / `sqlite3`
+      # targets that the SDK imports.
       if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR}/sqlite)
         target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR}/zlib)
@@ -1000,9 +1001,10 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         $<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>
         $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-reorder-ctor>
       )
-      # The vendored zlib headers always prefix exported symbols via names.h (act_z_*),
-      # so iOS cannot link mat against the system zlib. Mirror the SDK's Android build
-      # and provide a bundled zlib target for ORT's FetchContent build.
+      # The vendored zlib headers always prefix exported symbols via names.h (`act_z_*`), so
+      # iOS cannot link mat against the system zlib. Provide a bundled zlib target for the
+      # ORT FetchContent build and make it a public dependency of mat so static package
+      # consumers link the right archive.
       if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT TARGET onnxruntime_mat_zlib_bundled)
         add_library(onnxruntime_mat_zlib_bundled STATIC
           "${cpp_client_telemetry_SOURCE_DIR}/zlib/adler32.c"
@@ -1021,7 +1023,7 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
           "${cpp_client_telemetry_SOURCE_DIR}/zlib/uncompr.c"
           "${cpp_client_telemetry_SOURCE_DIR}/zlib/zutil.c"
         )
-        target_include_directories(onnxruntime_mat_zlib_bundled PUBLIC "${cpp_client_telemetry_SOURCE_DIR}/zlib")
+        target_include_directories(onnxruntime_mat_zlib_bundled PRIVATE "${cpp_client_telemetry_SOURCE_DIR}/zlib")
         target_compile_options(onnxruntime_mat_zlib_bundled PRIVATE
           -Wno-strict-prototypes
           -Wno-deprecated-non-prototype
@@ -1029,6 +1031,7 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         )
         target_link_libraries(mat PUBLIC onnxruntime_mat_zlib_bundled)
       endif()
+
       # The 1DS SDK's iOS path calls xcodebuild to find the sysroot, which can
       # fail (license not accepted, missing tools) and leave CMAKE_OSX_SYSROOT
       # empty in its scope. Force the correct sysroot via compile options.

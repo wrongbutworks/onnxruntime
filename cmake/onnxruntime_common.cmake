@@ -269,12 +269,20 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     endif()
     # Platform-specific system libraries required by the 1DS SDK
     if(APPLE)
-      target_link_libraries(onnxruntime_common PRIVATE
-        "-framework CoreFoundation"
-        "-framework Security"
-        z
-        sqlite3
-      )
+      if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        target_link_libraries(onnxruntime_common PRIVATE
+          "-framework CoreFoundation"
+          "-framework Security"
+          sqlite3
+        )
+      else()
+        target_link_libraries(onnxruntime_common PRIVATE
+          "-framework CoreFoundation"
+          "-framework Security"
+          z
+          sqlite3
+        )
+      endif()
     elseif(ANDROID)
       target_link_libraries(onnxruntime_common PRIVATE z log)
     elseif(UNIX)
@@ -283,6 +291,18 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         z
         sqlite3
       )
+    endif()
+
+    if (NOT onnxruntime_BUILD_SHARED_LIB)
+      install(TARGETS mat EXPORT ${PROJECT_NAME}Targets
+              ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+              LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+              RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+              FRAMEWORK DESTINATION ${CMAKE_INSTALL_BINDIR})
+      if(TARGET onnxruntime_mat_zlib_bundled)
+        install(TARGETS onnxruntime_mat_zlib_bundled EXPORT ${PROJECT_NAME}Targets
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+      endif()
     endif()
   else()
     message(FATAL_ERROR "Telemetry enabled but no 1DS SDK target ('MSTelemetry::mat' or 'mat') was found")
