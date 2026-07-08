@@ -50,6 +50,16 @@ TEST(TelemetryRedactionTest, GuardsHomeUsernameForPathEquivalentSpellings) {
   EXPECT_EQ(ScrubErrorMessage("/home/./alice/model.onnx"), "[path]/model.onnx");
 }
 
+TEST(TelemetryRedactionTest, TrailingSeparatorKeepsTwoRealSegments) {
+  // A path ending in a separator keeps the last two REAL segments -- the trailing separator is not
+  // treated as an empty final segment -- while the home user name stays redacted.
+  EXPECT_EQ(ScrubErrorMessage("/data/models/secret/"), "[path]/models/secret/");
+  EXPECT_EQ(ScrubErrorMessage("x/y/z/"), "[path]/y/z/");
+  EXPECT_EQ(ScrubErrorMessage("/home/alice/proj/sub/"), "[path]/proj/sub/");
+  EXPECT_EQ(ScrubErrorMessage("/home/alice/models/"), "[path]/models/");
+  EXPECT_EQ(ScrubErrorMessage("/home/alice/"), "[path]/");
+}
+
 TEST(TelemetryRedactionTest, WindowsDriveAndUncReplaced) {
   EXPECT_EQ(ScrubErrorMessage("Load C:\\proj\\bin\\m.onnx failed"), "Load [path]\\bin\\m.onnx failed");
   EXPECT_EQ(ScrubErrorMessage("open D:/data/secret/model.onnx"), "open [path]/secret/model.onnx");

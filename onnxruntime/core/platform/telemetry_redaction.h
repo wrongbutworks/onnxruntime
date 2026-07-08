@@ -87,14 +87,22 @@ inline std::string RedactPathToken(std::string_view token) {
   guard("/root/", false);
   guard("~/", false);      // normalized token also matches ~\.
 
-  // tail_start: start of the last two segments (the second-to-last separator). With a single
-  // separator only one segment is kept; with none, nothing beyond "[path]" is kept.
+  // tail_start: start of the last two segments (the second-to-last separator). Trailing separators
+  // are ignored first, so a path ending in a separator still keeps two real segments instead of
+  // dropping one. With a single separator only one segment is kept; with none, nothing beyond
+  // "[path]" is kept. (safe_start is unaffected, so the user-name guard still holds.)
+  size_t scan_end = token.size();
+  while (scan_end > 0 && is_sep(token[scan_end - 1])) {
+    --scan_end;
+  }
   size_t tail_start = token.size();
-  const size_t last_sep = token.find_last_of("/\\");
-  if (last_sep != std::string_view::npos) {
-    const size_t prev =
-        (last_sep == 0) ? std::string_view::npos : token.find_last_of("/\\", last_sep - 1);
-    tail_start = (prev == std::string_view::npos) ? last_sep : prev;
+  if (scan_end > 0) {
+    const size_t last_sep = token.find_last_of("/\\", scan_end - 1);
+    if (last_sep != std::string_view::npos) {
+      const size_t prev =
+          (last_sep == 0) ? std::string_view::npos : token.find_last_of("/\\", last_sep - 1);
+      tail_start = (prev == std::string_view::npos) ? last_sep : prev;
+    }
   }
 
   const size_t keep_from = (tail_start > safe_start) ? tail_start : safe_start;
