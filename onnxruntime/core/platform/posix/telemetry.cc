@@ -316,12 +316,7 @@ void PosixTelemetry::Initialize() {
 
   // Configure cache for offline scenarios — use same directory as device ID storage
   {
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-    constexpr bool is_mobile = true;
-#else
-    constexpr bool is_mobile = false;
-#endif
-    std::string cache_dir = DeviceId::EnsureStorageDirectory(is_mobile);
+    std::string cache_dir = DeviceId::EnsureStorageDirectory();
     if (!cache_dir.empty()) {
       std::string cache_path = cache_dir + "/telemetry_cache.db";
       config[CFG_STR_CACHE_FILE_PATH] = cache_path;

@@ -19,10 +19,6 @@
 #include <pwd.h>
 #include <fcntl.h>
 
-#ifdef __APPLE__
-#include <TargetConditionals.h>
-#endif
-
 namespace onnxruntime {
 
 DeviceId& DeviceId::Instance() {
@@ -101,7 +97,7 @@ bool DeviceId::IsValidGUID(const std::string& str) {
   return true;
 }
 
-std::string DeviceId::GetStorageDirectory(bool mobile) {
+std::string DeviceId::GetStorageDirectory() {
   // Prefer $HOME; fall back to the password database (getpwuid) for contexts where HOME is unset,
   // e.g. system services/daemons under systemd/launchd.
   std::string home;
@@ -121,19 +117,22 @@ std::string DeviceId::GetStorageDirectory(bool mobile) {
   }
   if (home.empty()) return "";
 
-  if (mobile) {
-    return home + "/.onnxruntime";
-  }
-
 #if defined(__APPLE__)
   return home + "/Library/Application Support/" + kDeviceIdDir;
 #else
-  return home + "/" + kDeviceIdDir;
+  // Follow the XDG Base Directory spec: prefer $XDG_CACHE_HOME, otherwise ~/.cache.
+  std::string cache_base;
+  if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg != nullptr && xdg[0] != '\0') {
+    cache_base = xdg;
+  } else {
+    cache_base = home + "/.cache";
+  }
+  return cache_base + "/" + kDeviceIdDir;
 #endif
 }
 
-std::string DeviceId::EnsureStorageDirectory(bool mobile) {
-  std::string dir = GetStorageDirectory(mobile);
+std::string DeviceId::EnsureStorageDirectory() {
+  std::string dir = GetStorageDirectory();
   if (!dir.empty()) {
     CreateDirectoryTree(dir);
   }
@@ -159,14 +158,7 @@ void DeviceId::InitializeInternal() {
   initialized_ = true;
 
   ORT_TRY {
-    // Use compile-time platform detection to select the appropriate storage path.
-    // This matches the mobile/desktop selection in posix/env.cc.
-#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
-    constexpr bool is_mobile = true;
-#else
-    constexpr bool is_mobile = false;
-#endif
-    std::string dir_path = GetStorageDirectory(is_mobile);
+    std::string dir_path = GetStorageDirectory();
     if (dir_path.empty()) {
       status_ = DeviceIdStatus::Failed;
       return;

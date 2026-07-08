@@ -160,10 +160,7 @@ if (onnxruntime_USE_TELEMETRY)
     set_target_properties(onnxruntime_common PROPERTIES COMPILE_FLAGS "/FI${ONNXRUNTIME_INCLUDE_DIR}/core/platform/windows/TraceLoggingConfigPrivate.h")
   else()
     target_compile_definitions(onnxruntime_common PRIVATE USE_POSIX_TELEMETRY)
-    # The optional tenant-token override is emitted into a generated header in the build tree rather
-    # than onto the compiler command line, so an injected token (sourced from a CI secret) does not
-    # leak into compile_commands.json or build logs. DIY builds leave onnxruntime_TELEMETRY_TENANT_TOKEN
-    # empty, so the header defines nothing and telemetry.cc uses its throwaway default.
+    # Optional tenant-token override, injected via a generated header (kept off the compiler command line).
     if(onnxruntime_TELEMETRY_TENANT_TOKEN)
       set(ONNXRUNTIME_TELEMETRY_TENANT_TOKEN_DEFINE "#define ORT_TELEMETRY_TENANT_TOKEN \"${onnxruntime_TELEMETRY_TENANT_TOKEN}\"")
     else()
@@ -244,14 +241,6 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     # directories and transitive dependencies (curl/sqlite3/zlib/nlohmann-json), so no
     # manual include paths or system libraries are required here.
     target_link_libraries(onnxruntime_common PRIVATE MSTelemetry::mat)
-    if(onnxruntime_TELEMETRY_SHARED_SDK AND onnxruntime_BUILD_SHARED_LIB)
-      # The vcpkg triplet built the SDK as a shared library (libmat.so) so it can be shared by
-      # several binaries (e.g. onnxruntime and onnxruntime-genai) instead of being statically
-      # embedded in each. Ship it next to libonnxruntime; the $ORIGIN/@loader_path RPATH set on the
-      # onnxruntime target (see onnxruntime.cmake) resolves it at load time. IMPORTED_RUNTIME_ARTIFACTS
-      # installs the resolved soname and its symlinks.
-      install(IMPORTED_RUNTIME_ARTIFACTS MSTelemetry::mat LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    endif()
   elseif(TARGET mat)
     if(onnxruntime_TELEMETRY_SHARED_SDK)
       message(FATAL_ERROR "onnxruntime_TELEMETRY_SHARED_SDK requires the vcpkg cpp-client-telemetry port (build with --use_vcpkg); it is not supported with the FetchContent fallback.")
