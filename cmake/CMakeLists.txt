@@ -1899,6 +1899,11 @@ else()
         add_library(safeint_interface IMPORTED INTERFACE)\n\
         target_include_directories(safeint_interface INTERFACE ${safeint_SOURCE_DIR})\n\
         ")
+    if(onnxruntime_USE_TELEMETRY AND NOT WIN32 AND onnxruntime_USE_VCPKG)
+      string(APPEND PROJECT_CONFIG_CONTENT
+        "find_dependency(MSTelemetry CONFIG)\n\
+        ")
+    endif()
   endif()
 
   string(APPEND PROJECT_CONFIG_CONTENT

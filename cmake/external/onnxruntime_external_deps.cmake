@@ -966,13 +966,17 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
       endif()
     endif()
 
-    # Patch the vendored SDK CMakeLists (see cmake/patches/cpp_client_telemetry). Skipped gracefully
-    # when the patch tool is unavailable, matching how other ORT FetchContent deps guard PATCH_COMMAND.
-    if(Patch_FOUND)
-      set(ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND ${Patch_EXECUTABLE} --binary --ignore-whitespace -p1 < ${PROJECT_SOURCE_DIR}/patches/cpp_client_telemetry/cpp_client_telemetry.patch)
-    else()
-      set(ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND "")
+    # The FetchContent fallback relies on ORT's patch for correct Apple/static behavior
+    # (source-root include fix, Apple mobile legacy dependency handling, and portable
+    # Apple static packaging). Require the patch tool instead of silently producing a
+    # broken or non-relocatable package when it is unavailable.
+    if(NOT Patch_FOUND)
+      message(FATAL_ERROR
+        "onnxruntime_USE_TELEMETRY with the FetchContent cpp_client_telemetry fallback requires the patch tool. "
+        "Install 'patch' or build with --use_vcpkg so MSTelemetry::mat is provided by the vcpkg port.")
     endif()
+    set(ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND
+      ${Patch_EXECUTABLE} --binary --ignore-whitespace -p1 < ${PROJECT_SOURCE_DIR}/patches/cpp_client_telemetry/cpp_client_telemetry.patch)
     onnxruntime_fetchcontent_declare(
       cpp_client_telemetry
       URL ${DEP_URL_cpp_client_telemetry}
@@ -982,19 +986,23 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     )
     onnxruntime_fetchcontent_makeavailable(cpp_client_telemetry)
 
-    # The vendored iOS bundled-dependency targets are internal implementation details.
-    # Their PUBLIC include dirs point into the FetchContent build tree, which breaks
-    # install(EXPORT). Keep their compile-time includes but clear the exported interface.
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-      if(TARGET sqlite3_bundled)
-        set_target_properties(sqlite3_bundled PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "")
-      endif()
-      if(TARGET zlib_bundled)
-        set_target_properties(zlib_bundled PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "")
-      endif()
-    endif()
-
     if(TARGET mat)
+      # cpp_client_telemetry's CMakeLists.txt uses include_directories(${CMAKE_SOURCE_DIR}) to find
+      # its bundled nlohmann/, sqlite/, and zlib/ headers. When built via FetchContent, CMAKE_SOURCE_DIR
+      # points to ORT's root instead. Fix by adding the actual source dir as an include path.
+      target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR})
+      # On iOS the 1DS SDK consumes vendored sqlite3/zlib headers. In the pinned legacy
+      # FetchContent path it still links against system sqlite3 and zlib, which is fine for
+      # sqlite3 but wrong for zlib because the vendored headers rename symbols to `act_z_*`.
+      # Add the vendored header directories only on iOS and pair them with a bundled zlib
+      # target below. On macOS the system <zlib.h> / <sqlite3.h> (resolved via /usr/local/include
+      # from lib/CMakeLists.txt) is the right header set to pair with the system `z` / `sqlite3`
+      # targets that the SDK imports.
+      if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        target_include_directories(mat BEFORE PRIVATE
+          ${cpp_client_telemetry_SOURCE_DIR}/sqlite
+          ${cpp_client_telemetry_SOURCE_DIR}/zlib)
+      endif()
       # ORT enables -ffast-math globally, which conflicts with
       # std::numeric_limits<double>::infinity() in the 1DS SDK's bundled nlohmann/json.hpp.
       # Also suppress warnings in the 1DS SDK code that ORT treats as errors.
@@ -1004,6 +1012,36 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         $<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>
         $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-reorder-ctor>
       )
+      # The vendored zlib headers always prefix exported symbols via names.h (`act_z_*`), so
+      # iOS cannot link mat against the system zlib. Provide a bundled zlib target for the
+      # ORT FetchContent build and make it a public dependency of mat so static package
+      # consumers link the right archive.
+      if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT TARGET onnxruntime_mat_zlib_bundled)
+        add_library(onnxruntime_mat_zlib_bundled STATIC
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/adler32.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/compress.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/crc32.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/deflate.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzclose.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzlib.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzread.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzwrite.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/infback.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inffast.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inflate.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inftrees.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/trees.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/uncompr.c"
+          "${cpp_client_telemetry_SOURCE_DIR}/zlib/zutil.c"
+        )
+        target_include_directories(onnxruntime_mat_zlib_bundled PRIVATE "${cpp_client_telemetry_SOURCE_DIR}/zlib")
+        target_compile_options(onnxruntime_mat_zlib_bundled PRIVATE
+          -Wno-strict-prototypes
+          -Wno-deprecated-non-prototype
+          -Wno-implicit-function-declaration
+        )
+        target_link_libraries(mat PUBLIC onnxruntime_mat_zlib_bundled)
+      endif()
       # The 1DS SDK's iOS path calls xcodebuild to find the sysroot, which can
       # fail (license not accepted, missing tools) and leave CMAKE_OSX_SYSROOT
       # empty in its scope. Force the correct sysroot via compile options.

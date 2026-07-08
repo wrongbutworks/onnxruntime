@@ -256,9 +256,20 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     if(onnxruntime_TELEMETRY_SHARED_SDK)
       message(FATAL_ERROR "onnxruntime_TELEMETRY_SHARED_SDK requires the vcpkg cpp-client-telemetry port (build with --use_vcpkg); it is not supported with the FetchContent fallback.")
     endif()
-    # mat is a FetchContent target. Link it directly for in-tree builds, and export/install it
-    # below for static package consumers on Apple/mobile where telemetry is shipped as archives.
-    target_link_libraries(onnxruntime_common PRIVATE mat)
+    if(NOT APPLE AND NOT onnxruntime_BUILD_SHARED_LIB)
+      message(FATAL_ERROR
+        "Telemetry with the FetchContent 1DS SDK path is not supported for non-Apple static packages. "
+        "Use onnxruntime_BUILD_SHARED_LIB=ON or build with --use_vcpkg so MSTelemetry::mat is exportable.")
+    endif()
+    # For shared builds, link directly against mat so its resolved dependency set is used.
+    # For static builds, mat should stay a build-only dependency unless we're generating an
+    # Apple static package, where we deliberately ship mat (and the iOS zlib companion archive
+    # when present) as part of the install.
+    if(onnxruntime_BUILD_SHARED_LIB OR (APPLE AND NOT onnxruntime_BUILD_SHARED_LIB))
+      target_link_libraries(onnxruntime_common PRIVATE mat)
+    else()
+      target_link_libraries(onnxruntime_common PRIVATE $<BUILD_INTERFACE:mat>)
+    endif()
     # mat propagates its public include dir as a normal (non-SYSTEM) include, so onnxruntime_common's
     # -Wall -Wextra -Werror would apply to the SDK's headers (they trip -Werror=unused-parameter in
     # NullObjects.hpp / LogManagerProvider.hpp). Re-add the SDK include dirs as SYSTEM to exempt them.
@@ -269,19 +280,32 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         ${cpp_client_telemetry_SOURCE_DIR}/lib
       )
     endif()
-    # mat links its own dependencies and platform frameworks.
-    if (NOT onnxruntime_BUILD_SHARED_LIB)
+    # Platform-specific system libraries required only for the Apple static-package path.
+    if(APPLE AND NOT onnxruntime_BUILD_SHARED_LIB)
+      if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        target_link_libraries(onnxruntime_common PRIVATE
+          "-framework CoreFoundation"
+          "-framework Security"
+          sqlite3
+        )
+      else()
+        target_link_libraries(onnxruntime_common PRIVATE
+          "-framework CoreFoundation"
+          "-framework Security"
+          z
+          sqlite3
+        )
+      endif()
+    endif()
+
+    if (APPLE AND NOT onnxruntime_BUILD_SHARED_LIB)
       install(TARGETS mat EXPORT ${PROJECT_NAME}Targets
               ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
               LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
               RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
               FRAMEWORK DESTINATION ${CMAKE_INSTALL_BINDIR})
-      if(TARGET sqlite3_bundled)
-        install(TARGETS sqlite3_bundled EXPORT ${PROJECT_NAME}Targets
-                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
-      endif()
-      if(TARGET zlib_bundled)
-        install(TARGETS zlib_bundled EXPORT ${PROJECT_NAME}Targets
+      if(TARGET onnxruntime_mat_zlib_bundled)
+        install(TARGETS onnxruntime_mat_zlib_bundled EXPORT ${PROJECT_NAME}Targets
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
       endif()
     endif()
