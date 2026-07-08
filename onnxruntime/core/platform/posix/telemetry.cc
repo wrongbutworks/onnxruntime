@@ -691,6 +691,7 @@ void PosixTelemetry::LogSessionCreation(
 
   auto builder = EventBuilder(std::move(event_name), EventPriority::CRITICAL,
                               PDT_SoftwareSetupAndInventory | PDT_ProductAndServicePerformance)
+                     .SetSchemaVersion(2)
                      .AddUInt32("sessionId", session_id)
                      .AddInt64("irVersion", ir_version)
                      .AddString("modelProducerName", model_producer_name)
@@ -702,13 +703,13 @@ void PosixTelemetry::LogSessionCreation(
                      .AddString("modelWeightType", model_weight_type)
                      .AddString("modelGraphHash", model_graph_hash)
                      .AddString("modelWeightHash", model_weight_hash)
-                     .AddStringMap("modelMetadata", model_metadata)
+                     .AddStringMap("modelMetaData", model_metadata)
                      .AddString("loadedFrom", loadedFrom)
                      .AddStringList("executionProviderIds", execution_provider_ids)
                      .AddString("hardwareDeviceTypes", hardware_device_types)
                      .AddString("hardwareVendorIds", hardware_vendor_ids)
                      .AddString("executionProviderVersions", ep_versions)
-                     .AddBool("useFp16", use_fp16);
+                     .AddBool("usefp16", use_fp16);
 
   LogEventAsync(builder.Build());
 }
