@@ -85,7 +85,7 @@ inline std::string RedactPathToken(std::string_view token) {
   guard("/home/", true);
   guard("/users/", true);  // normalized token also matches /Users/, \Users\, \users\, mixed forms
   guard("/root/", false);
-  guard("~/", false);      // normalized token also matches ~\.
+  guard("~/", false);  // normalized token also matches ~\.
 
   // tail_start: start of the last two segments (the second-to-last separator). Trailing separators
   // are ignored first, so a path ending in a separator still keeps two real segments instead of
