@@ -872,7 +872,8 @@ def add_other_feature_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--use_telemetry",
         action="store_true",
-        help="Enable telemetry (ETW on Windows; 1DS on Linux, macOS, Android, and iOS).",
+        help="Enable telemetry (ETW on Windows; 1DS on Linux, macOS, Android, and iOS). "
+        "Not supported for WebAssembly/Emscripten builds.",
     )
 
 
