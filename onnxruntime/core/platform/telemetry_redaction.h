@@ -63,6 +63,14 @@ inline std::string RedactPathToken(std::string_view token) {
     for (size_t p = norm.find(marker); p != std::string::npos; p = norm.find(marker, p + 1)) {
       size_t e = p + marker.size();
       if (has_user) {
+        // Skip separators and "." (current-dir) segments so path-equivalent spellings such as
+        // /home//user or /home/./user still keep the user name out of the tail, then consume the
+        // real user-name segment up to its trailing separator.
+        while (e < token.size() &&
+               (is_sep(token[e]) ||
+                (token[e] == '.' && (e + 1 == token.size() || is_sep(token[e + 1]))))) {
+          ++e;
+        }
         while (e < token.size() && !is_sep(token[e])) {
           ++e;  // consume <user>, stopping at its trailing separator (or end of token)
         }

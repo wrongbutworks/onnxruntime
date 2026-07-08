@@ -41,6 +41,15 @@ TEST(TelemetryRedactionTest, GuardsHomeUsernameAcrossCaseAndSeparatorVariants) {
   EXPECT_EQ(ScrubErrorMessage("C:\\Users/bob/proj\\model.onnx"), "[path]/proj\\model.onnx");
 }
 
+TEST(TelemetryRedactionTest, GuardsHomeUsernameForPathEquivalentSpellings) {
+  // Redundant separators and "." segments (common from sloppy path joins) must not let the user
+  // name slip into the kept tail: /home//user, C:\Users\\user, and /home/./user all reduce like
+  // the canonical form.
+  EXPECT_EQ(ScrubErrorMessage("/home//alice/model.onnx"), "[path]/model.onnx");
+  EXPECT_EQ(ScrubErrorMessage("C:\\Users\\\\alice\\model.onnx"), "[path]\\model.onnx");
+  EXPECT_EQ(ScrubErrorMessage("/home/./alice/model.onnx"), "[path]/model.onnx");
+}
+
 TEST(TelemetryRedactionTest, WindowsDriveAndUncReplaced) {
   EXPECT_EQ(ScrubErrorMessage("Load C:\\proj\\bin\\m.onnx failed"), "Load [path]\\bin\\m.onnx failed");
   EXPECT_EQ(ScrubErrorMessage("open D:/data/secret/model.onnx"), "open [path]/secret/model.onnx");
