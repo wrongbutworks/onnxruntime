@@ -617,7 +617,12 @@ def generate_build_tree(
             )
         elif args.android:
             generate_android_triplets(
-                build_dir, configs, args.android_cpp_shared, args.android_api, args.use_full_protobuf
+                build_dir,
+                configs,
+                args.android_cpp_shared,
+                args.android_api,
+                args.use_full_protobuf,
+                args.use_telemetry,
             )
         elif is_windows():
             generate_windows_triplets(build_dir, configs, args.msvc_toolset, args.use_full_protobuf)

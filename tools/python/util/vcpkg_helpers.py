@@ -202,6 +202,7 @@ def generate_triplet_for_android(
     use_cpp_shared: bool,
     android_api_level: int,
     use_full_protobuf: bool,
+    use_telemetry: bool = False,
 ) -> None:
     """
     Generate triplet file for Android platform.
@@ -216,6 +217,7 @@ def generate_triplet_for_android(
         use_cpp_shared(bool): The type of C++ Runtime to use. If it is false, use "c++_static" which is the default for most CMake projects. Otherwise set the runtime to c++_shared.
         android_api_level(int): android_api_level
         use_full_protobuf(bool): Flag indicating if full protobuf should be used (vs lite).
+        use_telemetry (bool): Flag indicating if telemetry is enabled; when set, sqlite3 (the telemetry SDK's offline store) is compiled with size-reducing feature omits.
     """
     folder_name_parts = []
     if enable_asan:
@@ -311,6 +313,18 @@ def generate_triplet_for_android(
                 f.write(f'set(VCPKG_C_FLAGS_RELWITHDEBINFO "{" ".join(cflags_release)}")\n')
                 f.write(f'set(VCPKG_CXX_FLAGS_RELWITHDEBINFO "{" ".join(cflags_release)}")\n')
 
+            if use_telemetry:
+                # sqlite3 is pulled in only as the 1DS telemetry SDK's offline store; compile it with
+                # the matching feature reductions (see _SQLITE_TELEMETRY_MINIMAL_DEFINES) to shrink the
+                # offline-storage footprint and drop runtime extension loading. The per-PORT guard
+                # applies the flags only to sqlite3, and writing this block only for telemetry builds
+                # leaves a non-telemetry build's triplet byte-for-byte unchanged so its vcpkg binary
+                # cache stays valid (vcpkg keys that cache on the whole triplet file's contents).
+                sqlite_min_defines = " ".join(_SQLITE_TELEMETRY_MINIMAL_DEFINES)
+                f.write('if(PORT STREQUAL "sqlite3")\n')
+                f.write(f'    string(APPEND VCPKG_C_FLAGS " {sqlite_min_defines}")\n')
+                f.write("endif()\n")
+
             # Set target platform
             # VCPKG_CMAKE_SYSTEM_NAME specifies the target platform.
             f.write("set(VCPKG_CMAKE_SYSTEM_NAME Android)\n")
@@ -331,7 +345,12 @@ def generate_triplet_for_android(
 
 
 def generate_android_triplets(
-    build_dir: str, configs: set[str], use_cpp_shared: bool, android_api_level: int, use_full_protobuf: bool
+    build_dir: str,
+    configs: set[str],
+    use_cpp_shared: bool,
+    android_api_level: int,
+    use_full_protobuf: bool,
+    use_telemetry: bool = False,
 ) -> None:
     """
     Generate triplet files for POSIX platforms (Linux, macOS, Android).
@@ -339,6 +358,7 @@ def generate_android_triplets(
     Args:
         build_dir (str): The directory to save the generated triplet files.
         use_full_protobuf (bool): Flag indicating if full Protobuf is used.
+        use_telemetry (bool): Flag indicating if telemetry is enabled (triggers a size-reduced sqlite3 build).
     """
     target_abis = ["x64", "arm64", "arm-neon", "x86"]
     for enable_asan in [True, False]:
@@ -359,6 +379,7 @@ def generate_android_triplets(
                             use_cpp_shared,
                             android_api_level,
                             use_full_protobuf=use_full_protobuf,
+                            use_telemetry=use_telemetry,
                         )
 
 
