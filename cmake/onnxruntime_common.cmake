@@ -242,9 +242,6 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     # manual include paths or system libraries are required here.
     target_link_libraries(onnxruntime_common PRIVATE MSTelemetry::mat)
   elseif(TARGET mat)
-    if(onnxruntime_TELEMETRY_SHARED_SDK)
-      message(FATAL_ERROR "onnxruntime_TELEMETRY_SHARED_SDK requires the vcpkg cpp-client-telemetry port (build with --use_vcpkg); it is not supported with the FetchContent fallback.")
-    endif()
     if(NOT APPLE AND NOT onnxruntime_BUILD_SHARED_LIB)
       message(FATAL_ERROR
         "Telemetry with the FetchContent 1DS SDK path is not supported for non-Apple static packages. "
