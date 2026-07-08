@@ -9,9 +9,9 @@ The software may collect information about you and your use of the software and 
 On Windows, private builds compiled from source perform no data collection. On the non-Windows platforms, telemetry is enabled by default — including in builds compiled from source — so it is present unless you turn it off (see [Disabling Telemetry](#disabling-telemetry)).
 
 ### Official Builds
-ONNX Runtime does not maintain any independent telemetry collection mechanisms outside of what is provided by the platforms it supports. However, where applicable, ONNX Runtime will take advantage of platform-supported telemetry systems to collect trace events with the goal of improving product quality.
+ONNX Runtime collects trace events with the goal of improving product quality. On Windows it uses the platform's built-in ETW telemetry system; on the non-Windows platforms it uses the cross-platform 1DS telemetry SDK that is built into ONNX Runtime. In all cases collection is subject to user consent and handled following Microsoft's privacy practices.
 
-Telemetry is turned **ON** by default in the official builds ([see here](../README.md#binaries)): on Windows it is implemented with the platform ETW provider, and on the non-Windows platforms — Linux, macOS, Android, and iOS — with the cross-platform 1DS telemetry provider (the standard build scripts enable the `--use_telemetry` build option for these). WebAssembly builds do not include telemetry. Data collection is implemented via 'Platform Telemetry' per vendor platform providers (see [telemetry.h](../onnxruntime/core/platform/telemetry.h)).
+Telemetry is turned **ON** by default in the official builds ([see here](../README.md#binaries)): on Windows it is implemented with the platform ETW provider, and on the non-Windows platforms — Linux, macOS, Android, and iOS — with the cross-platform 1DS telemetry provider (the standard build scripts enable the `--use_telemetry` build option for these). WebAssembly builds do not include telemetry. Both providers are accessed through ONNX Runtime's common telemetry interface (see [telemetry.h](../onnxruntime/core/platform/telemetry.h)).
 
 #### Technical Details
 
