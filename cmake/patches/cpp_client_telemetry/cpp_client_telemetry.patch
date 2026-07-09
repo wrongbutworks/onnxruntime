@@ -2,7 +2,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 360bf74..a27d947 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -389,6 +389,6 @@ if(MATSDK_USE_VCPKG_DEPS)
+@@ -389,7 +389,7 @@ if(MATSDK_USE_VCPKG_DEPS)
    message(STATUS "Using vcpkg-provided sqlite3, zlib, nlohmann-json")
  else()
    # Include repo root to allow includes of vendored sqlite, zlib, and nlohmann
@@ -10,34 +10,42 @@ index 360bf74..a27d947 100644
 +  include_directories(${CMAKE_CURRENT_SOURCE_DIR})
    message(STATUS "Using vendored sqlite3, zlib, nlohmann-json")
  endif()
-
+ 
 diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
-index 0d41618..2b3c0fd 100644
+index 0d41618..2cff900 100644
 --- a/lib/CMakeLists.txt
 +++ b/lib/CMakeLists.txt
-@@ -8,5 +8,5 @@ include_directories( . ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/i
+@@ -7,7 +7,7 @@ cmake_policy(SET CMP0063 NEW)
+ include_directories( . ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/public ${CMAKE_CURRENT_SOURCE_DIR}/include/mat ${CMAKE_CURRENT_SOURCE_DIR}/pal ${CMAKE_CURRENT_SOURCE_DIR}/utils ${CMAKE_CURRENT_SOURCE_DIR}/modules/exp ${CMAKE_CURRENT_SOURCE_DIR}/modules/dataviewer ${CMAKE_CURRENT_SOURCE_DIR}/modules/privacyguard ${CMAKE_CURRENT_SOURCE_DIR}/modules/liveeventinspector ${CMAKE_CURRENT_SOURCE_DIR}/modules/cds ${CMAKE_CURRENT_SOURCE_DIR}/modules/signals ${CMAKE_CURRENT_SOURCE_DIR}/modules/sanitizer )
  
  # Legacy builds may need system-installed deps from /usr/local/include
 -if(NOT MATSDK_USE_VCPKG_DEPS)
 +if(NOT MATSDK_USE_VCPKG_DEPS AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
    include_directories(/usr/local/include)
  endif()
-
-diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
-index 0d41618..2b3c0fd 100644
---- a/lib/CMakeLists.txt
-+++ b/lib/CMakeLists.txt
-@@ -442,5 +442,13 @@ else()
  
-    target_link_libraries(mat PRIVATE sqlite3_bundled zlib_bundled ${LIBS})
-+  elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-+    # On Apple mobile, use the SDK sqlite3 but let ORT supply a bundled zlib archive:
-+    # the vendored zlib headers rename symbols to act_z_* so system zlib cannot satisfy them.
-+    target_link_libraries(mat PRIVATE sqlite3 ${LIBS})
+@@ -406,8 +406,11 @@ if(MATSDK_USE_VCPKG_DEPS)
+   )
+ else()
+   # Legacy mode: use vendored or system-installed deps
+-  if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+-    # Android NDK has no system sqlite3 or zlib — build from bundled source.
++  if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR MATSDK_BUNDLE_VENDORED_DEPS)
++    # Build sqlite3 and zlib from the bundled vendored sources. Used on Android (no system libs),
++    # on iOS (the vendored zlib headers rename symbols to act_z_*, so system zlib cannot satisfy
++    # them), and for ORT static non-Apple packages (imported/system libs are not exportable).
++    # ORT selects this via MATSDK_BUNDLE_VENDORED_DEPS.
+     add_library(sqlite3_bundled STATIC "${CMAKE_CURRENT_SOURCE_DIR}/../sqlite/sqlite3.c")
+     target_include_directories(sqlite3_bundled PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../sqlite")
+     set_target_properties(sqlite3_bundled PROPERTIES POSITION_INDEPENDENT_CODE ON)
+@@ -442,6 +445,10 @@ else()
+     target_compile_definitions(zlib_bundled PRIVATE Z_HAVE_UNISTD_H)
+ 
+     target_link_libraries(mat PRIVATE sqlite3_bundled zlib_bundled ${LIBS})
 +  elseif(APPLE)
 +    # On macOS, prefer portable system link names instead of absolute Homebrew archive paths
 +    # so exported static packages remain relocatable for downstream consumers.
 +    target_link_libraries(mat PRIVATE sqlite3 z ${LIBS})
-  elseif(PAL_IMPLEMENTATION STREQUAL "WIN32")
-    # Windows legacy: vendored sqlite/zlib headers are included via
-    # include_directories in the PAL section above; link only ${LIBS}
+   elseif(PAL_IMPLEMENTATION STREQUAL "WIN32")
+     # Windows legacy: vendored sqlite/zlib headers are included via
+     # include_directories in the PAL section above; link only ${LIBS}

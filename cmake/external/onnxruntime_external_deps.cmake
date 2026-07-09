@@ -977,6 +977,14 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
     endif()
     set(ONNXRUNTIME_CPP_CLIENT_TELEMETRY_PATCH_COMMAND
       ${Patch_EXECUTABLE} --binary --ignore-whitespace -p1 < ${PROJECT_SOURCE_DIR}/patches/cpp_client_telemetry/cpp_client_telemetry.patch)
+    # Tell the SDK (via its patched lib/CMakeLists.txt) to build sqlite3 and zlib from its vendored
+    # sources instead of linking imported/system libs. Needed on iOS (the vendored zlib headers rename
+    # symbols to act_z_*, so system zlib cannot satisfy them) and for static non-Apple packages
+    # (imported targets like SQLite::SQLite3 / ZLIB::ZLIB cannot be installed into ORT's export set, so
+    # find_package(onnxruntime) against a static install would otherwise fail on a missing dependency).
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR (NOT APPLE AND NOT onnxruntime_BUILD_SHARED_LIB))
+      set(MATSDK_BUNDLE_VENDORED_DEPS ON)
+    endif()
     onnxruntime_fetchcontent_declare(
       cpp_client_telemetry
       URL ${DEP_URL_cpp_client_telemetry}
@@ -991,18 +999,19 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
       # its bundled nlohmann/, sqlite/, and zlib/ headers. When built via FetchContent, CMAKE_SOURCE_DIR
       # points to ORT's root instead. Fix by adding the actual source dir as an include path.
       target_include_directories(mat PRIVATE ${cpp_client_telemetry_SOURCE_DIR})
-      # On iOS the 1DS SDK consumes vendored sqlite3/zlib headers. In the pinned legacy
-      # FetchContent path it still links against system sqlite3 and zlib, which is fine for
-      # sqlite3 but wrong for zlib because the vendored headers rename symbols to `act_z_*`.
-      # Add the vendored header directories only on iOS and pair them with a bundled zlib
-      # target below. On macOS the system <zlib.h> / <sqlite3.h> (resolved via /usr/local/include
-      # from lib/CMakeLists.txt) is the right header set to pair with the system `z` / `sqlite3`
-      # targets that the SDK imports.
-      if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        target_include_directories(mat BEFORE PRIVATE
-          ${cpp_client_telemetry_SOURCE_DIR}/sqlite
-          ${cpp_client_telemetry_SOURCE_DIR}/zlib)
-      endif()
+      # The SDK's bundled sqlite3_bundled/zlib_bundled targets (built for Android, iOS, and non-Apple
+      # static packages via MATSDK_BUNDLE_VENDORED_DEPS) expose their vendored header dirs as PUBLIC
+      # includes with build-tree paths, which mat picks up to compile. install(EXPORT) rejects a
+      # build/source-tree include path on an exported target, so scope them to the build only.
+      foreach(_ort_bundled_dep sqlite3_bundled zlib_bundled)
+        if(TARGET ${_ort_bundled_dep})
+          get_target_property(_ort_bundled_inc ${_ort_bundled_dep} INTERFACE_INCLUDE_DIRECTORIES)
+          if(_ort_bundled_inc)
+            set_target_properties(${_ort_bundled_dep} PROPERTIES
+              INTERFACE_INCLUDE_DIRECTORIES "$<BUILD_INTERFACE:${_ort_bundled_inc}>")
+          endif()
+        endif()
+      endforeach()
       # ORT enables -ffast-math globally, which conflicts with
       # std::numeric_limits<double>::infinity() in the 1DS SDK's bundled nlohmann/json.hpp.
       # Also suppress warnings in the 1DS SDK code that ORT treats as errors.
@@ -1012,41 +1021,15 @@ if(onnxruntime_USE_TELEMETRY AND NOT WIN32)
         $<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>
         $<$<CXX_COMPILER_ID:Clang,AppleClang>:-Wno-reorder-ctor>
       )
-      # The vendored zlib headers always prefix exported symbols via names.h (`act_z_*`), so
-      # iOS cannot link mat against the system zlib. Provide a bundled zlib target for the
-      # ORT FetchContent build and make it a public dependency of mat so static package
-      # consumers link the right archive.
-      if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT TARGET onnxruntime_mat_zlib_bundled)
-        add_library(onnxruntime_mat_zlib_bundled STATIC
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/adler32.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/compress.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/crc32.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/deflate.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzclose.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzlib.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzread.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/gzwrite.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/infback.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inffast.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inflate.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/inftrees.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/trees.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/uncompr.c"
-          "${cpp_client_telemetry_SOURCE_DIR}/zlib/zutil.c"
-        )
-        target_include_directories(onnxruntime_mat_zlib_bundled PRIVATE "${cpp_client_telemetry_SOURCE_DIR}/zlib")
-        target_compile_options(onnxruntime_mat_zlib_bundled PRIVATE
-          -Wno-strict-prototypes
-          -Wno-deprecated-non-prototype
-          -Wno-implicit-function-declaration
-        )
-        target_link_libraries(mat PUBLIC onnxruntime_mat_zlib_bundled)
-      endif()
-      # The 1DS SDK's iOS path calls xcodebuild to find the sysroot, which can
-      # fail (license not accepted, missing tools) and leave CMAKE_OSX_SYSROOT
-      # empty in its scope. Force the correct sysroot via compile options.
+      # The 1DS SDK's iOS path calls xcodebuild to find the sysroot, which can fail (license not
+      # accepted, missing tools) and leave CMAKE_OSX_SYSROOT empty in its scope. Force the correct
+      # sysroot on mat and the bundled C archives it links via compile options.
       if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND CMAKE_OSX_SYSROOT)
-        target_compile_options(mat PRIVATE "-isysroot" "${CMAKE_OSX_SYSROOT}")
+        foreach(_ort_mat_tgt mat sqlite3_bundled zlib_bundled)
+          if(TARGET ${_ort_mat_tgt})
+            target_compile_options(${_ort_mat_tgt} PRIVATE "-isysroot" "${CMAKE_OSX_SYSROOT}")
+          endif()
+        endforeach()
       endif()
     endif()
 
