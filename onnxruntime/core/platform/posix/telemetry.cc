@@ -39,6 +39,13 @@
 // injected token off the compiler command line). See TENANT_TOKEN below.
 #include "onnxruntime_telemetry_tenant_token.h"
 
+// Optional caller-framework label provided at build time via -Donnxruntime_CALLER_FRAMEWORK
+// (empty by default). Redistributors that embed ORT set it to attribute their telemetry, matching
+// the Windows provider's frameworkName field.
+#ifndef ORT_CALLER_FRAMEWORK
+#define ORT_CALLER_FRAMEWORK ""
+#endif
+
 using namespace Microsoft::Applications::Events;
 
 namespace onnxruntime {
@@ -103,9 +110,6 @@ class EventBuilder {
 
     // All ORT telemetry is required system metadata (no PII)
     props_.SetLevel(DIAG_LEVEL_REQUIRED);
-
-    // Language projection identifier set by the active binding (see SetLanguageProjection).
-    props_.SetProperty("projection", static_cast<int64_t>(PosixTelemetry::projection_.load()));
   }
 
   EventBuilder& AddString(const char* key, const std::string& value) {
@@ -360,6 +364,12 @@ void PosixTelemetry::Initialize() {
   logger->SetContext("AppVersion", ORT_VERSION);
   logger->SetContext("Platform", GetPlatformInfo());
 
+  // Caller-framework label from the build-time ORT_CALLER_FRAMEWORK option; only stamped when a
+  // redistributor sets it, so standard builds add nothing. Matches the Windows provider's field.
+  if (std::string framework = ORT_CALLER_FRAMEWORK; !framework.empty()) {
+    logger->SetContext("frameworkName", framework);
+  }
+
   // Publish the fully-configured logger atomically; concurrent readers observe it only now.
   // enabled_ is left to its default / the runtime EnableTelemetryEvents()/DisableTelemetryEvents()
   // opt-in state rather than being force-set here.
@@ -475,19 +485,85 @@ std::string PosixTelemetry::GetProcessName() const {
   return name ? name : "";
 
 #elif defined(__linux__) || defined(__ANDROID__)
-  // /proc/self/comm contains the process name (up to 15 chars)
-  std::ifstream comm("/proc/self/comm");
-  if (comm.is_open()) {
-    std::string name;
-    std::getline(comm, name);
-    while (!name.empty() && (name.back() == '\n' || name.back() == '\r'))
-      name.pop_back();
-    return name;
+  // /proc/self/cmdline holds the full null-separated argv; argv[0]'s basename is the executable
+  // name and is not truncated (unlike /proc/self/comm, which caps the name at 15 characters).
+  {
+    std::ifstream cmdline("/proc/self/cmdline", std::ios::binary);
+    if (cmdline.is_open()) {
+      std::string arg0;
+      std::getline(cmdline, arg0, '\0');
+      if (!arg0.empty()) {
+        const size_t slash = arg0.find_last_of('/');
+        return slash == std::string::npos ? arg0 : arg0.substr(slash + 1);
+      }
+    }
+  }
+  // Fallback to /proc/self/comm (process name, capped at 15 characters).
+  {
+    std::ifstream comm("/proc/self/comm");
+    if (comm.is_open()) {
+      std::string name;
+      std::getline(comm, name);
+      while (!name.empty() && (name.back() == '\n' || name.back() == '\r'))
+        name.pop_back();
+      return name;
+    }
   }
   return "";
 
 #else
   return "";
+#endif
+}
+
+// Get the CPU brand string (e.g. "Intel(R) Core(TM) i7-10700K"). Empty when unavailable.
+std::string PosixTelemetry::GetCpuModel() const {
+#if defined(__APPLE__)
+  // macOS/iOS expose the CPU brand string via sysctl.
+  char buf[256] = {0};
+  size_t size = sizeof(buf);
+  if (sysctlbyname("machdep.cpu.brand_string", buf, &size, nullptr, 0) == 0) {
+    return std::string(buf);
+  }
+  return "";
+
+#elif defined(__linux__) || defined(__ANDROID__)
+  // /proc/cpuinfo exposes the CPU brand as "model name" (x86) or "Hardware" (ARM).
+  std::ifstream cpuinfo("/proc/cpuinfo");
+  std::string line;
+  std::string hardware;
+  while (std::getline(cpuinfo, line)) {
+    const size_t colon = line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    std::string key = line.substr(0, colon);
+    while (!key.empty() && std::isspace(static_cast<unsigned char>(key.back()))) {
+      key.pop_back();
+    }
+    std::string value = line.substr(colon + 1);
+    const size_t start = value.find_first_not_of(" \t");
+    value = (start == std::string::npos) ? std::string() : value.substr(start);
+    if (key == "model name") {
+      return value;
+    }
+    if (hardware.empty() && key == "Hardware") {
+      hardware = value;
+    }
+  }
+  return hardware;
+
+#else
+  return "";
+#endif
+}
+
+// Coarse device class for the host: "Mobile" on Android/iOS, "Desktop" elsewhere.
+std::string PosixTelemetry::GetDeviceClass() const {
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IOS)
+  return "Mobile";
+#else
+  return "Desktop";
 #endif
 }
 
@@ -598,6 +674,8 @@ void PosixTelemetry::LogProcessInfo() const {
                      .AddString("osDescription", GetOsDescription())
                      .AddString("processName", GetProcessName())
                      .AddString("architecture", GetArchitecture())
+                     .AddString("cpuModel", GetCpuModel())
+                     .AddString("deviceClass", GetDeviceClass())
                      .AddInt32("cpuCount", static_cast<int32_t>(std::thread::hardware_concurrency()))
                      .AddInt64("totalMemoryMB", GetTotalMemoryMB())
                      .AddString("locale", GetLocale());
@@ -673,6 +751,7 @@ void PosixTelemetry::LogSessionCreation(
   auto builder = EventBuilder(std::move(event_name), EventPriority::CRITICAL)
                      .AddUInt32("sessionId", session_id)
                      .AddInt64("irVersion", ir_version)
+                     .AddUInt32("OrtProgrammingProjection", projection_.load())
                      .AddString("modelProducerName", model_producer_name)
                      .AddString("modelProducerVersion", model_producer_version)
                      .AddString("modelDomain", model_domain)
@@ -798,8 +877,8 @@ void PosixTelemetry::LogRuntimePerf(
 
   auto event = EventBuilder("RuntimePerf", EventPriority::NORMAL)
                    .AddUInt32("sessionId", session_id)
-                   .AddUInt32("totalRunsSinceLast", total_runs_since_last)
-                   .AddInt64("totalRunDurationSinceLast", total_run_duration_since_last)
+                   .AddUInt32("totalRuns", total_runs_since_last)
+                   .AddInt64("totalRunDuration", total_run_duration_since_last)
                    .AddBatchSizeDurations(duration_per_batch_size)
                    .Build();
 
