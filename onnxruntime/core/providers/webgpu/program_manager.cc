@@ -231,10 +231,6 @@ Status ProgramManager::Build(const ProgramBase& program,
       };
 
   if (out_future != nullptr) {
-    // Asynchronous mode (deferred-dispatch): issue the async pipeline creation and return the
-    // future without waiting. Ownership of the callback context is returned to the caller, which
-    // must keep it (and the `compute_pipeline` storage it references) alive until the future is
-    // waited on.
     ORT_ENFORCE(out_ctx != nullptr, "out_ctx must be provided when out_future is provided.");
     auto ctx = std::make_unique<PipelineCallbackContext>(compute_pipeline, Status{});
     *out_future = device.CreateComputePipelineAsync(
@@ -246,7 +242,6 @@ Status ProgramManager::Build(const ProgramBase& program,
     return Status::OK();
   }
 
-  // Synchronous mode: create the pipeline and wait for completion inline.
   PipelineCallbackContext sync_context{compute_pipeline, {}};
   ORT_RETURN_IF_ERROR(
       webgpu_context_.Wait(
