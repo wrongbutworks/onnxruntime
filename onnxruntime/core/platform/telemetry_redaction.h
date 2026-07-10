@@ -11,7 +11,7 @@ namespace onnxruntime {
 namespace telemetry_detail {
 
 // Returns true if a whitespace-delimited token looks like a filesystem path. Used to redact paths
-// (which embed usernames / directory layout) from error text.
+// (which embed usernames / directory layout) from telemetry strings.
 inline bool LooksLikePath(std::string_view token) {
   if (token.find('\\') != std::string_view::npos) {
     return true;  // any backslash: Windows path / UNC
@@ -34,8 +34,8 @@ inline bool LooksLikePath(std::string_view token) {
 
 }  // namespace telemetry_detail
 
-// Maximum transmitted error-message length, applied after scrubbing to bound telemetry payload size.
-inline constexpr size_t kMaxTelemetryErrorMessageLength = 256;
+// Maximum transmitted telemetry-string length, applied after scrubbing to bound telemetry payload size.
+inline constexpr size_t kMaxTelemetryStringLength = 256;
 
 namespace telemetry_detail {
 
@@ -115,12 +115,12 @@ inline std::string RedactPathToken(std::string_view token) {
 
 }  // namespace telemetry_detail
 
-// Scrub filesystem paths out of a free-text error string before transmission and cap its length.
+// Scrub filesystem paths out of a free-text telemetry string before transmission and cap its length.
 // Each whitespace-delimited token that looks like a path is replaced with a "[path]" placeholder that
 // retains the last two path segments (parent directory + file name) for debuggability, while still
 // redacting the sensitive prefix — in particular any home directory + user name (e.g. /home/<name>/
 // or C:\Users\<name>\), which is never kept.
-inline std::string ScrubErrorMessage(std::string_view msg) {
+inline std::string ScrubStringForTelemetry(std::string_view msg) {
   using telemetry_detail::LooksLikePath;
   using telemetry_detail::RedactPathToken;
 
@@ -146,8 +146,8 @@ inline std::string ScrubErrorMessage(std::string_view msg) {
     }
   }
 
-  if (out.size() > kMaxTelemetryErrorMessageLength) {
-    out.resize(kMaxTelemetryErrorMessageLength);
+  if (out.size() > kMaxTelemetryStringLength) {
+    out.resize(kMaxTelemetryStringLength);
   }
   return out;
 }

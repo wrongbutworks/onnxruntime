@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include "core/common/logging/logging.h"
+#include "core/platform/telemetry_redaction.h"
 #include "onnxruntime_config.h"
 
 // ETW includes
@@ -543,6 +544,7 @@ void WindowsTelemetry::LogCompileModelComplete(uint32_t session_id,
   if (global_register_count_ == 0 || enabled_ == false)
     return;
 
+  const std::string scrubbed_error = ScrubStringForTelemetry(error_message);
   TraceLoggingWrite(telemetry_provider_handle,
                     "CompileModelComplete",
                     TraceLoggingBool(true, "UTCReplace_AppSessionGuid"),
@@ -555,7 +557,7 @@ void WindowsTelemetry::LogCompileModelComplete(uint32_t session_id,
                     TraceLoggingBool(success, "success"),
                     TraceLoggingUInt32(error_code, "errorCode"),
                     TraceLoggingUInt32(error_category, "errorCategory"),
-                    TraceLoggingString(error_message.c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(ORT_CALLER_FRAMEWORK, "frameworkName"));
 }
 
@@ -564,6 +566,7 @@ void WindowsTelemetry::LogRuntimeError(uint32_t session_id, const common::Status
   if (global_register_count_ == 0 || enabled_ == false)
     return;
 
+  const std::string scrubbed_error = ScrubStringForTelemetry(status.ErrorMessage());
 #ifdef _WIN32
   HRESULT hr = common::StatusCodeToHRESULT(static_cast<common::StatusCode>(status.Code()));
   TraceLoggingWrite(telemetry_provider_handle,
@@ -578,7 +581,7 @@ void WindowsTelemetry::LogRuntimeError(uint32_t session_id, const common::Status
                     TraceLoggingUInt32(session_id, "sessionId"),
                     TraceLoggingUInt32(status.Code(), "errorCode"),
                     TraceLoggingUInt32(status.Category(), "errorCategory"),
-                    TraceLoggingString(status.ErrorMessage().c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(file, "file"),
                     TraceLoggingString(function, "function"),
                     TraceLoggingInt32(line, "line"),
@@ -596,7 +599,7 @@ void WindowsTelemetry::LogRuntimeError(uint32_t session_id, const common::Status
                     TraceLoggingUInt32(session_id, "sessionId"),
                     TraceLoggingUInt32(status.Code(), "errorCode"),
                     TraceLoggingUInt32(status.Category(), "errorCategory"),
-                    TraceLoggingString(status.ErrorMessage().c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(file, "file"),
                     TraceLoggingString(function, "function"),
                     TraceLoggingInt32(line, "line"),
@@ -611,6 +614,7 @@ void WindowsTelemetry::LogRuntimeInferenceError(uint32_t session_id, const commo
   if (global_register_count_ == 0 || enabled_ == false)
     return;
 
+  const std::string scrubbed_error = ScrubStringForTelemetry(status.ErrorMessage());
   TraceLoggingWrite(telemetry_provider_handle,
                     "RuntimeInferenceError",
                     TraceLoggingBool(true, "UTCReplace_AppSessionGuid"),
@@ -622,7 +626,7 @@ void WindowsTelemetry::LogRuntimeInferenceError(uint32_t session_id, const commo
                     TraceLoggingUInt32(session_id, "sessionId"),
                     TraceLoggingUInt32(status.Code(), "errorCode"),
                     TraceLoggingUInt32(status.Category(), "errorCategory"),
-                    TraceLoggingString(status.ErrorMessage().c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(ep_versions.c_str(), "executionProviderVersions"),
                     TraceLoggingString(ep_device_types.c_str(), "executionProviderDeviceTypes"),
                     TraceLoggingString(ORT_VERSION, "runtimeVersion"),
@@ -831,6 +835,7 @@ void WindowsTelemetry::LogModelLoadEnd(uint32_t session_id, const common::Status
   if (global_register_count_ == 0 || enabled_ == false)
     return;
 
+  const std::string scrubbed_error = status.IsOK() ? std::string() : ScrubStringForTelemetry(status.ErrorMessage());
   TraceLoggingWrite(telemetry_provider_handle,
                     "ModelLoadEnd",
                     TraceLoggingBool(true, "UTCReplace_AppSessionGuid"),
@@ -843,7 +848,7 @@ void WindowsTelemetry::LogModelLoadEnd(uint32_t session_id, const common::Status
                     TraceLoggingBool(status.IsOK(), "isSuccess"),
                     TraceLoggingUInt32(status.Code(), "errorCode"),
                     TraceLoggingUInt32(status.Category(), "errorCategory"),
-                    TraceLoggingString(status.IsOK() ? "" : status.ErrorMessage().c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(ORT_CALLER_FRAMEWORK, "frameworkName"));
 }
 
@@ -852,6 +857,7 @@ void WindowsTelemetry::LogSessionCreationEnd(uint32_t session_id,
   if (global_register_count_ == 0 || enabled_ == false)
     return;
 
+  const std::string scrubbed_error = status.IsOK() ? std::string() : ScrubStringForTelemetry(status.ErrorMessage());
   TraceLoggingWrite(telemetry_provider_handle,
                     "SessionCreationEnd",
                     TraceLoggingBool(true, "UTCReplace_AppSessionGuid"),
@@ -864,7 +870,7 @@ void WindowsTelemetry::LogSessionCreationEnd(uint32_t session_id,
                     TraceLoggingBool(status.IsOK(), "isSuccess"),
                     TraceLoggingUInt32(status.Code(), "errorCode"),
                     TraceLoggingUInt32(status.Category(), "errorCategory"),
-                    TraceLoggingString(status.IsOK() ? "" : status.ErrorMessage().c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(ORT_CALLER_FRAMEWORK, "frameworkName"));
 }
 
@@ -908,6 +914,7 @@ void WindowsTelemetry::LogRegisterEpLibraryEnd(const std::string& registration_n
   if (global_register_count_ == 0 || enabled_ == false)
     return;
 
+  const std::string scrubbed_error = status.IsOK() ? std::string() : ScrubStringForTelemetry(status.ErrorMessage());
   TraceLoggingWrite(telemetry_provider_handle,
                     "RegisterEpLibraryEnd",
                     TraceLoggingBool(true, "UTCReplace_AppSessionGuid"),
@@ -920,7 +927,7 @@ void WindowsTelemetry::LogRegisterEpLibraryEnd(const std::string& registration_n
                     TraceLoggingBool(status.IsOK(), "isSuccess"),
                     TraceLoggingUInt32(status.Code(), "errorCode"),
                     TraceLoggingUInt32(status.Category(), "errorCategory"),
-                    TraceLoggingString(status.IsOK() ? "" : status.ErrorMessage().c_str(), "errorMessage"),
+                    TraceLoggingString(scrubbed_error.c_str(), "errorMessage"),
                     TraceLoggingString(ORT_CALLER_FRAMEWORK, "frameworkName"));
 }
 
