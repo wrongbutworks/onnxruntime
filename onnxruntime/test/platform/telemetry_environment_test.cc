@@ -33,7 +33,14 @@ void UnsetEnv(const char* name) {
 class ScopedEnvVar {
  public:
   explicit ScopedEnvVar(const char* name) : name_(name) {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)  // std::getenv is fine here; only reading a value to save/restore
+#endif
     const char* value = std::getenv(name);
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
     had_value_ = value != nullptr;
     if (had_value_) {
       saved_ = value;
