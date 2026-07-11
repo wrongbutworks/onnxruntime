@@ -3,6 +3,7 @@
 
 #include "core/platform/posix/telemetry.h"
 #include "core/platform/posix/device_id.h"
+#include "core/platform/telemetry_environment.h"
 #include "core/platform/telemetry_redaction.h"
 
 #ifdef __APPLE__
@@ -272,18 +273,12 @@ void PosixTelemetry::LogEventAsync(Microsoft::Applications::Events::EventPropert
 void PosixTelemetry::Initialize() {
   std::unique_lock<std::shared_mutex> lock(mutex_);
 
-  // Environment opt-out: ORT_TELEMETRY_DISABLED set to a truthy value (1/true/yes/on/y,
-  // case-insensitive) disables telemetry at runtime without recompiling and skips creating the 1DS
-  // uploader entirely.
-  if (const char* env = std::getenv("ORT_TELEMETRY_DISABLED"); env != nullptr) {
-    std::string value(env);
-    for (char& ch : value) {
-      ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    if (value == "1" || value == "true" || value == "yes" || value == "on" || value == "y") {
-      enabled_.store(false, std::memory_order_release);
-      return;
-    }
+  // Suppress all telemetry when explicitly disabled via ORT_TELEMETRY_DISABLED or when running in a
+  // CI / build-pipeline environment (matches Olive / Foundry Local): skip creating the 1DS uploader
+  // entirely so no events are emitted.
+  if (ShouldSuppressTelemetry()) {
+    enabled_.store(false, std::memory_order_release);
+    return;
   }
 
   // NOTE: On Android, the Java layer must be initialized before calling this:
